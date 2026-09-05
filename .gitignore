@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Environment & IDE
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Temporary outputs
+*.log
+test_*.json
+discoverability_*.json
+engagement_*.json
