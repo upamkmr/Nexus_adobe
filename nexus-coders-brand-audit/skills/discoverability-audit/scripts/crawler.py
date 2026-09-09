@@ -12,8 +12,10 @@ import sys
 import os
 import re
 import json
+import time
 import argparse
 import urllib.parse
+import urllib.robotparser
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Set
 
@@ -54,7 +56,7 @@ AUTHORITATIVE_ENTITY_DOMAINS = [
 class BrandAuditCrawler:
     """Safe, read-only crawler and discoverability auditor."""
 
-    def __init__(self, base_url: str, max_pages: int = 15, timeout: int = 6):
+    def __init__(self, base_url: str, max_pages: int = 15, timeout: int = 6, crawl_delay: float = 0.4):
         parsed = urllib.parse.urlparse(base_url)
         if not parsed.scheme:
             base_url = "https://" + base_url
@@ -63,6 +65,8 @@ class BrandAuditCrawler:
         self.netloc = parsed.netloc.lower()
         self.max_pages = max(1, min(max_pages, 50))
         self.timeout = timeout
+        # Politeness delay between requests to this host (guardrail: no rate-abusing actions).
+        self.crawl_delay = crawl_delay
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": AUDIT_USER_AGENT,
@@ -77,6 +81,22 @@ class BrandAuditCrawler:
         self.llms_txt_url: Optional[str] = None
         self.sitemap_found: bool = False
         self.sitemap_urls: List[str] = []
+        # Standard robots.txt compliance for the audit crawler's OWN traffic — this is
+        # separate from the AI-bot-disallow *reporting* logic below, which inspects
+        # whether GPTBot/ClaudeBot/etc. are blocked (that's a finding about the site,
+        # not a constraint on us). This RobotFileParser enforces the guardrail that the
+        # marketplace itself must never crawl paths the site disallows.
+        self._robot_parser: Optional[urllib.robotparser.RobotFileParser] = None
+        self._robots_delay: Optional[float] = None
+
+    def _may_fetch(self, url: str) -> bool:
+        """Returns False if robots.txt disallows OUR crawler on this path."""
+        if self._robot_parser is None:
+            return True
+        try:
+            return self._robot_parser.can_fetch(AUDIT_USER_AGENT, url) and self._robot_parser.can_fetch("*", url)
+        except Exception:
+            return True
 
     def run(self) -> Dict[str, Any]:
         """Executes the full discoverability audit pipeline."""
@@ -135,6 +155,25 @@ class BrandAuditCrawler:
         }
         self.sitemap_urls = sitemaps
 
+        # Load a standard RobotFileParser so OUR OWN crawl obeys the site's rules
+        # (guardrail: "Respect robots.txt"), independent of the AI-bot reporting above.
+        try:
+            rp = urllib.robotparser.RobotFileParser()
+            rp.set_url(robots_url)
+            if raw_text:
+                rp.parse(raw_text.splitlines())
+            else:
+                rp.parse([])
+            self._robot_parser = rp
+            try:
+                delay = rp.crawl_delay(AUDIT_USER_AGENT) or rp.crawl_delay("*")
+                if delay:
+                    self._robots_delay = float(delay)
+            except Exception:
+                pass
+        except Exception:
+            self._robot_parser = None
+
     def _check_llms_txt(self):
         """Checks for the presence of modern /llms.txt or /.well-known/llms.txt."""
         candidates = [
@@ -152,13 +191,28 @@ class BrandAuditCrawler:
                 continue
 
     def _crawl_site(self):
-        """Crawls up to max_pages within the domain to collect evidence."""
+        """Crawls up to max_pages within the domain to collect evidence.
+
+        Respects robots.txt: any path disallowed to our audit User-Agent (or '*')
+        is skipped entirely, never fetched, and never counted against max_pages.
+        """
         queue = [self.base_url]
+        delay = self._robots_delay if self._robots_delay is not None else self.crawl_delay
+        first_request = True
 
         while queue and len(self.crawled_urls) < self.max_pages:
             current_url = queue.pop(0)
             if current_url in self.crawled_urls:
                 continue
+
+            if not self._may_fetch(current_url):
+                # Disallowed by robots.txt — record as skipped, never fetched.
+                self.crawled_urls.add(current_url)
+                continue
+
+            if not first_request and delay > 0:
+                time.sleep(delay)
+            first_request = False
 
             page_metrics, internal_links = self._audit_page(current_url)
             self.crawled_urls.add(current_url)
@@ -166,7 +220,7 @@ class BrandAuditCrawler:
                 self.pages_data.append(page_metrics)
 
             for link in internal_links:
-                if link not in self.crawled_urls and link not in queue and len(queue) < 100:
+                if link not in self.crawled_urls and link not in queue and len(queue) < 100 and self._may_fetch(link):
                     queue.append(link)
 
     def _audit_page(self, url: str) -> (Optional[Dict[str, Any]], List[str]):
@@ -243,6 +297,20 @@ class BrandAuditCrawler:
             if not alt or len(alt.strip()) < 3:
                 missing_alt += 1
 
+        # 4b. Facts Locked in Canvas / PDF-Only Content (non-text render traps)
+        canvas_count = len(soup.find_all("canvas"))
+        is_canvas_heavy = canvas_count > 0 and text_len < 300
+        pdf_links = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"].strip().lower()
+            if href.endswith(".pdf"):
+                link_text = a.get_text(strip=True)
+                pdf_links.append(link_text or href)
+        # A page whose only substantive content pointer is a PDF (very little
+        # surrounding readable text) traps facts in a format most AI crawlers
+        # either skip or extract poorly.
+        pdf_only_risk = bool(pdf_links) and text_len < 400
+
         # 5. Headings & Hierarchy
         h1_count = len(soup.find_all("h1"))
         h2_count = len(soup.find_all("h2"))
@@ -286,6 +354,10 @@ class BrandAuditCrawler:
             "is_js_skeleton": is_js_skeleton,
             "total_images": total_imgs,
             "missing_alt_images": missing_alt,
+            "canvas_count": canvas_count,
+            "is_canvas_heavy": is_canvas_heavy,
+            "pdf_links": pdf_links,
+            "pdf_only_risk": pdf_only_risk,
             "h1_count": h1_count,
             "h2_count": h2_count,
             "h3_count": h3_count,
@@ -386,6 +458,29 @@ class BrandAuditCrawler:
                 "evidence": f"Analyzed {total_images} images across crawled pages; {missing_alt} ({missing_pct}%) lack descriptive alt attributes, making product diagrams and brand badges unreadable to AI summarizers.",
                 "suggested_action": {
                     "summary": "Audit image assets and provide concise, descriptive 'alt' text that captures facts, metrics, and functional descriptions for screen-readers and AI parsers.",
+                    "priority": "medium"
+                }
+            })
+            finding_idx += 1
+
+        # -------------------------------------------------------------
+        # 4c. Facts Locked in Canvas or PDF-Only Content (Medium)
+        # -------------------------------------------------------------
+        canvas_heavy_pages = df[df["is_canvas_heavy"] == True]
+        pdf_risk_pages = df[df["pdf_only_risk"] == True]
+        if len(canvas_heavy_pages) > 0 or len(pdf_risk_pages) > 0:
+            examples = []
+            if len(canvas_heavy_pages) > 0:
+                examples.append(f"{len(canvas_heavy_pages)} page(s) render key content inside <canvas> with under 300 chars of surrounding text")
+            if len(pdf_risk_pages) > 0:
+                examples.append(f"{len(pdf_risk_pages)} page(s) point to PDF documents as the primary content with under 400 chars of on-page text")
+            findings.append({
+                "id": f"F-{finding_idx:03d}",
+                "title": "Facts Locked in Canvas or PDF-Only Content",
+                "severity": "medium",
+                "evidence": "; ".join(examples) + ". Canvas-rendered graphics and PDF-only documents are frequently skipped or poorly parsed by AI retrieval crawlers, unlike plain HTML text.",
+                "suggested_action": {
+                    "summary": "Mirror the key facts from canvas graphics and linked PDFs as plain, readable HTML text on the same page (e.g. a text summary or transcript block), reserving canvas/PDF for the visual presentation only.",
                     "priority": "medium"
                 }
             })

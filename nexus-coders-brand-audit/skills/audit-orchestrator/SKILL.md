@@ -1,7 +1,8 @@
 ---
 name: audit-orchestrator
-description: Entrypoint orchestrator skill for the nexus-coders-brand-audit marketplace. Coordinates the discoverability-audit and engagement-audit skills, aggregates quantitative crawl metrics and qualitative UX friction checks, synthesizes proactive beyond-defect recommendations, and emits the final unified JSON audit report. Use whenever a full brand AI-readiness and engagement audit is requested for any website or domain.
+description: Entrypoint orchestrator skill for the nexus-coders-brand-audit marketplace. Coordinates the discoverability-audit and engagement-audit skills, both of which run deterministic, robots.txt-respecting crawls and emit quantitative, evidence-backed findings; merges their outputs, synthesizes proactive beyond-defect recommendations, and emits the final unified JSON audit report. Use whenever a full brand AI-readiness and engagement audit is requested for any website or domain.
 license: Apache-2.0
+allowed-tools: Bash, WebSearch
 ---
 
 # Audit Orchestrator (Brand AI-Readiness & Engagement Audit)
@@ -31,22 +32,28 @@ Activate this skill when:
      python3 skills/discoverability-audit/scripts/crawler.py <target-url> --max-pages 15 --output ./discoverability_raw.json
      ```
    - Ingest quantitative metrics covering:
-     - `robots.txt` AI crawler disallows (`GPTBot`, `ClaudeBot`, `PerplexityBot`, etc.).
+     - `robots.txt` AI crawler disallows (`GPTBot`, `ClaudeBot`, `PerplexityBot`, etc.) — an informational finding about the *site*.
      - `llms.txt` and `/.well-known/llms.txt` presence.
      - Schema.org JSON-LD coverage across sampled pages.
      - Client-side JS rendering gaps (empty skeleton root tags).
-     - Images missing descriptive `alt` text.
+     - Facts locked in non-text media: images missing descriptive `alt` text, canvas-heavy pages, and PDF-only content.
      - Cross-web entity corroboration (`sameAs` links to Wikidata, LinkedIn, Crunchbase).
      - Freshness indicators (copyright year, HTTP `Last-Modified`).
+   - Note: the crawler's *own* traffic separately respects the site's `robots.txt` via `RobotFileParser` — it never fetches a disallowed path, regardless of what it reports about AI bots.
+   - After the crawl, follow `skills/discoverability-audit/references/corroboration-guide.md` to spot-check up to 3 load-bearing factual claims against independent web sources (using this skill's `WebSearch` access) and fold any contradicted/uncorroborated results into the findings list.
 
 3. **Execute On-Site Engagement & Retention Audit**:
-   - Trigger the `engagement-audit` skill using the criteria in `skills/engagement-audit/references/checklist.md`.
-   - Evaluate sampled pages against human visitor retention signals:
-     - Above-the-fold value proposition clarity (the 5-second test on `<h1>` and subheads).
+   - Trigger the `engagement-audit` skill by running its bundled analyzer, which performs its own independent, robots.txt-respecting crawl:
+     ```bash
+     python3 skills/engagement-audit/scripts/engagement_analyzer.py <target-url> --max-pages 10 --output ./engagement_raw.json
+     ```
+   - Ingest quantitative metrics covering:
+     - Above-the-fold value proposition clarity (`<h1>` count/uniqueness and specificity — the 5-second test).
      - Navigation orientation and breadcrumb trails for deep-linked arrivals.
-     - Heading hierarchy progression and reading scannability.
-     - Call-to-Action (CTA) clarity, visual dominance, and elimination of dead ends.
-     - Mobile viewport tag presence and responsive layout stability.
+     - Long unbroken prose blocks and reading scannability.
+     - Call-to-Action (CTA) clarity and the share of pages with zero detectable CTA (dead ends).
+     - Mobile viewport tag presence and image-dimension attributes (layout-shift risk).
+   - For qualitative nuance the script cannot statically measure (rendered CLS, tap-target sizing, hero-visual quality), consult `skills/engagement-audit/references/checklist.md`.
 
 4. **Correlate, Deduplicate, and Prioritize Findings**:
    - Assign sequential IDs (`F-001`, `F-002`, ...).

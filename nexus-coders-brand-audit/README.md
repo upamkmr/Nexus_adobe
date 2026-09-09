@@ -31,13 +31,19 @@ nexus-coders-brand-audit/
     │   └── SKILL.md
     ├── discoverability-audit/      <- Dedicated skill for off-site AI readiness checks
     │   ├── SKILL.md
-    │   └── scripts/
-    │       └── crawler.py          <- Pandas-powered quantitative crawler & data analyzer
+    │   ├── scripts/
+    │   │   └── crawler.py          <- Pandas-powered quantitative crawler & data analyzer
+    │   └── references/
+    │       └── corroboration-guide.md  <- Deterministic procedure for live cross-web spot-checks
     └── engagement-audit/           <- Dedicated skill for on-site visitor retention checks
         ├── SKILL.md
+        ├── scripts/
+        │   └── engagement_analyzer.py  <- Pandas-powered quantitative UX/retention analyzer
         └── references/
-            └── checklist.md        <- Granular guidelines keeping SKILL.md lean (progressive disclosure)
+            └── checklist.md        <- Qualitative judgment-call guidelines (progressive disclosure)
 ```
+
+Both `discoverability-audit` and `engagement-audit` are **self-contained and deterministic**: each performs its own read-only, `robots.txt`-respecting crawl (standard library `RobotFileParser`, polite crawl delay) and computes findings from concrete HTML signals via Pandas — neither depends on the other having run first, so either can be reused standalone outside this marketplace.
 
 ### Composition Flow
 
@@ -47,17 +53,20 @@ flowchart TD
     
     subgraph Discoverability ["Off-Site AI Discoverability"]
         Entrypoint --> DiscSkill["skills/discoverability-audit"]
-        DiscSkill --> Crawler["scripts/crawler.py\n(Pandas Aggregation Engine)"]
-        Crawler --> DiscFindings["Empirical Metrics:\n• robots.txt AI Bot Directives\n• Schema.org JSON-LD Coverage %\n• JS Skeleton / SSR Hydration Gaps\n• Non-Text Media Lock (Alt %)\n• Entity Corroboration (sameAs)\n• llms.txt Availability\n• Freshness & Copyright Signals"]
+        DiscSkill --> Crawler["scripts/crawler.py\n(robots.txt-respecting, Pandas aggregation)"]
+        Crawler --> DiscFindings["Empirical Metrics:\n• robots.txt AI Bot Directives\n• Schema.org JSON-LD Coverage %\n• JS Skeleton / SSR Hydration Gaps\n• Non-Text Media Lock (Alt % / Canvas / PDF-only)\n• sameAs Presence (proxy signal)\n• llms.txt Availability\n• Freshness & Copyright Signals"]
+        DiscSkill -.after crawl.-> Corrob["references/corroboration-guide.md\n(live WebSearch spot-check:\ncontradicted / mistaken-identity claims)"]
     end
 
     subgraph Engagement ["On-Site Visitor Retention"]
         Entrypoint --> EngSkill["skills/engagement-audit"]
-        EngSkill --> CheckRef["references/checklist.md\n(Progressive Disclosure Rubric)"]
-        CheckRef --> EngFindings["UX Retention Signals:\n• Above-The-Fold Value Prop (5s Rule)\n• Deep-Link Landing Orientation & Breadcrumbs\n• Scannability & Heading Hierarchy\n• CTA Prominence & Dead-End Elimination\n• Mobile Viewport Configuration"]
+        EngSkill --> EngScript["scripts/engagement_analyzer.py\n(robots.txt-respecting, Pandas aggregation)"]
+        EngScript --> EngFindings["UX Retention Signals:\n• Above-The-Fold Value Prop (5s Rule)\n• Deep-Link Landing Orientation & Breadcrumbs\n• Long Prose Blocks / Scannability\n• CTA Vagueness % & Dead-End Pages\n• Mobile Viewport & Layout-Shift Risk"]
+        EngScript -.qualitative judgment calls.-> CheckRef["references/checklist.md"]
     end
 
     DiscFindings --> Synthesizer["Correlation & Proactive Recommendations Engine"]
+    Corrob --> Synthesizer
     EngFindings --> Synthesizer
     Synthesizer --> FinalReport["Single Unified Audit Report\n(Strict JSON Schema)"]
 ```
@@ -81,12 +90,13 @@ flowchart TD
   - `schema_coverage_pct = (df['has_schema'].sum() / len(df)) * 100`
   - `missing_alt_pct = (df['missing_alt_images'].sum() / df['total_images'].sum()) * 100`
   - `is_js_skeleton = (df['text_length'] < 250) & (raw_html contains SPA roots)`
-- **Key Checks**: AI bot access (`GPTBot`, `ClaudeBot`, `PerplexityBot`), `llms.txt`, Schema.org types (`Organization`, `Product`, `FAQPage`, `BreadcrumbList`), non-text locks, and Wikidata/Crunchbase `sameAs` entity links.
+- **Key Checks**: AI bot access (`GPTBot`, `ClaudeBot`, `PerplexityBot`), `llms.txt`, Schema.org types (`Organization`, `Product`, `FAQPage`, `BreadcrumbList`), non-text locks (alt text, canvas, PDF-only content), and a two-stage entity-corroboration check: `sameAs` presence as a static proxy signal, plus a live [WebSearch spot-check](skills/discoverability-audit/references/corroboration-guide.md) of up to 3 load-bearing claims against independent sources — flagging `contradicted` (mistaken-identity risk) vs. merely `uncorroborated` claims differently.
 
 ### C. `engagement-audit` (On-Site Visitor Retention)
 - **Role**: Tests why human visitors who arrive from AI citations stay or bounce.
-- **Reference**: [references/checklist.md](skills/engagement-audit/references/checklist.md) implements progressive disclosure, keeping the main `SKILL.md` lean.
-- **Key Checks**: 5-second value proposition clarity, landing orientation, breadcrumb navigation, heading hierarchy scannability, CTA visibility, and mobile viewport configuration.
+- **Engine**: [scripts/engagement_analyzer.py](skills/engagement-audit/scripts/engagement_analyzer.py) — a self-contained, robots.txt-respecting crawler and Pandas analyzer that runs independently of `discoverability-audit`.
+- **Reference**: [references/checklist.md](skills/engagement-audit/references/checklist.md) covers the qualitative judgment calls the script can't measure statically (rendered CLS, tap-target sizing, hero-visual quality), implementing progressive disclosure to keep `SKILL.md` lean.
+- **Key Checks**: 5-second value proposition clarity (`<h1>` count/specificity), deep-link landing orientation & breadcrumb detection, long unbroken prose block counts, CTA-vagueness ratio and dead-end (zero-CTA) page share, mobile viewport tag, and image-dimension-driven layout-shift risk.
 
 ---
 
@@ -97,9 +107,10 @@ flowchart TD
 - Required packages: `requests`, `beautifulsoup4`, `pandas` (install via `pip install requests beautifulsoup4 pandas`)
 
 ### Direct CLI Audit
-Run the crawler directly on any target domain:
+Run either analyzer directly on any target domain — both are self-contained CLIs:
 ```bash
-python3 skills/discoverability-audit/scripts/crawler.py https://example.com --max-pages 15 --output audit_report.json
+python3 skills/discoverability-audit/scripts/crawler.py https://example.com --max-pages 15 --output discoverability_report.json
+python3 skills/engagement-audit/scripts/engagement_analyzer.py https://example.com --max-pages 10 --output engagement_report.json
 ```
 
 ### Autonomous Agent Invocation
@@ -156,10 +167,11 @@ The output strictly complies with the required Adobe Hackathon Round 3 schema fl
 
 | Requirement | Guardrail / Evaluation Metric | Nexus Coders Implementation |
 | :--- | :--- | :--- |
-| **Recommend-Only** | Absolutely no destructive, mutating, or authenticated actions | Read-only HTTP `GET`/`HEAD` requests; safe sandbox operation. |
-| **Robots Respect** | Safe crawling and respect for rate limits | Checks robots.txt rules, respects crawl delays, and bounds maximum crawl depth. |
-| **Performance** | Audit runtime < 5 minutes | Optimized concurrency and polite timeouts; average audit completes in **< 30 seconds**. |
+| **Recommend-Only** | Absolutely no destructive, mutating, or authenticated actions | Read-only HTTP `GET` requests only; no writes, no auth, no rate-abuse; safe sandbox operation. |
+| **Robots Respect** | Safe crawling and respect for `robots.txt` | Both `crawler.py` and `engagement_analyzer.py` load the site's `robots.txt` via the standard-library `RobotFileParser` and **never fetch a disallowed path** for their own User-Agent or `*`; this is enforced separately from — and in addition to — the *informational* check of whether AI bots like GPTBot are blocked. A `Crawl-delay` directive, if declared, is honored; otherwise a default 0.4s politeness delay is applied. |
+| **Performance** | Audit runtime < 5 minutes | Sequential, polite requests with short timeouts; a typical `max-pages 15` audit completes well under a minute. |
 | **Package Size** | Submission zip ≤ 50 MB | Clean, lightweight repository (**< 1 MB**) with zero binary weights. |
-| **Decomposition** | Multi-skill architecture with single entrypoint | Separate discoverability and engagement skills cleanly composed under `audit-orchestrator`. |
-| **Proactive Suggestions**| Beyond-defect recommendations | Recommends `llms.txt`, conversational `FAQPage` microdata, and interactive widgets. |
-| **Evidence Quality** | Empirical quantitative backing | **Pandas** vectorized calculation of exact percentages, ratios, and counts. |
+| **Decomposition** | Multi-skill architecture with single entrypoint | Two independently-runnable, self-contained audit skills (`discoverability-audit`, `engagement-audit`) cleanly composed under `audit-orchestrator` — genuine separation of off-site vs. on-site concerns, not padding. |
+| **Determinism & Hygiene** | Deterministic, agentskills.io-compliant skills | Both audit skills run fixed Python scripts (no LLM judgment calls in the scoring loop) that produce the same findings for the same HTML; each `SKILL.md` declares `name`, `description`, `license`, and `allowed-tools`. |
+| **Proactive Suggestions**| Beyond-defect recommendations | Recommends `llms.txt`, conversational `FAQPage` microdata, canvas/PDF fact-mirroring, and an above-the-fold instant-value widget for AI-referred visitors. |
+| **Evidence Quality** | Empirical quantitative backing | **Pandas** vectorized calculation of exact percentages, ratios, and counts on both the discoverability and engagement sides, plus a live cross-web corroboration spot-check for entity-disambiguation risk. |

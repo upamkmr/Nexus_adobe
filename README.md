@@ -13,6 +13,7 @@ The complete Agent Skill Marketplace package is located in:
 - **Discoverability Audit Skill**: [`nexus-coders-brand-audit/skills/discoverability-audit/SKILL.md`](./nexus-coders-brand-audit/skills/discoverability-audit/SKILL.md)
 - **Pandas Crawler Script**: [`nexus-coders-brand-audit/skills/discoverability-audit/scripts/crawler.py`](./nexus-coders-brand-audit/skills/discoverability-audit/scripts/crawler.py)
 - **Engagement Audit Skill**: [`nexus-coders-brand-audit/skills/engagement-audit/SKILL.md`](./nexus-coders-brand-audit/skills/engagement-audit/SKILL.md)
+- **Engagement Analyzer Script**: [`nexus-coders-brand-audit/skills/engagement-audit/scripts/engagement_analyzer.py`](./nexus-coders-brand-audit/skills/engagement-audit/scripts/engagement_analyzer.py)
 - **Engagement Retention Checklist**: [`nexus-coders-brand-audit/skills/engagement-audit/references/checklist.md`](./nexus-coders-brand-audit/skills/engagement-audit/references/checklist.md)
 
 ## Validation & Packaging
@@ -22,7 +23,8 @@ To validate all skills and generate the submission zip file (`nexus-coders-brand
 ```
 
 ## Running an Audit
-To execute an audit on any website:
+Both audit skills are self-contained CLIs that respect `robots.txt` and only make read-only GET requests:
 ```bash
-python3 nexus-coders-brand-audit/skills/discoverability-audit/scripts/crawler.py https://example.com --max-pages 15 --output report.json
+python3 nexus-coders-brand-audit/skills/discoverability-audit/scripts/crawler.py https://example.com --max-pages 15 --output discoverability_report.json
+python3 nexus-coders-brand-audit/skills/engagement-audit/scripts/engagement_analyzer.py https://example.com --max-pages 10 --output engagement_report.json
 ```

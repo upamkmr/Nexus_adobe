@@ -44,6 +44,10 @@ echo "3. Smoke testing crawler.py..."
 python3 "$MARKETPLACE_DIR/skills/discoverability-audit/scripts/crawler.py" --help > /dev/null
 echo "   ✓ crawler.py CLI test passed."
 
+echo "3b. Smoke testing engagement_analyzer.py..."
+python3 "$MARKETPLACE_DIR/skills/engagement-audit/scripts/engagement_analyzer.py" --help > /dev/null
+echo "   ✓ engagement_analyzer.py CLI test passed."
+
 echo "4. Generating $ZIP_NAME..."
 rm -f "$ZIP_NAME"
 # Zip the marketplace contents per Adobe guidelines
