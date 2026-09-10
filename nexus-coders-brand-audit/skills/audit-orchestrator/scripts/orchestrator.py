@@ -169,8 +169,6 @@ class AuditOrchestrator:
         Mathematically sums summary counts from both sub-skills and concatenates findings into one array.
         """
         site = disc_report.get("site") or eng_report.get("site") or self.netloc or "unknown"
-        disc_summary = disc_report.get("summary", {})
-        eng_summary = eng_report.get("summary", {})
 
         disc_findings = disc_report.get("findings", [])
         eng_findings = eng_report.get("findings", [])
@@ -190,48 +188,26 @@ class AuditOrchestrator:
                     new_entry = dict(f)
                     seen_titles[norm_title] = new_entry
                     merged_raw.append(new_entry)
-            
-            # Re-index
-            merged_findings = []
-            for idx, finding in enumerate(merged_raw, start=1):
-                entry = dict(finding)
-                entry["id"] = f"F-{idx:03d}"
-                merged_findings.append(entry)
-
-            # Re-calculate counts
-            summary = {
-                "total_findings": len(merged_findings),
-                "critical": sum(1 for f in merged_findings if f.get("severity") == "critical"),
-                "high": sum(1 for f in merged_findings if f.get("severity") == "high"),
-                "medium": sum(1 for f in merged_findings if f.get("severity") == "medium"),
-                "low": sum(1 for f in merged_findings if f.get("severity") == "low"),
-            }
+            raw_concatenated = merged_raw
         else:
-            # Standard specification behavior:
-            # 1. Mathematically sum total_findings, critical, high, medium, and low counts
-            summary = {
-                "total_findings": int(disc_summary.get("total_findings", 0)) + int(eng_summary.get("total_findings", 0)),
-                "critical": int(disc_summary.get("critical", 0)) + int(eng_summary.get("critical", 0)),
-                "high": int(disc_summary.get("high", 0)) + int(eng_summary.get("high", 0)),
-                "medium": int(disc_summary.get("medium", 0)) + int(eng_summary.get("medium", 0)),
-                "low": int(disc_summary.get("low", 0)) + int(eng_summary.get("low", 0)),
-            }
-
-            # 2. Concatenate both findings lists into one array
             raw_concatenated = list(disc_findings) + list(eng_findings)
 
-            # 3. Sequentially re-index findings F-001, F-002, ... for clean contiguous IDs
-            merged_findings = []
-            for idx, finding in enumerate(raw_concatenated, start=1):
-                entry = dict(finding)
-                entry["id"] = f"F-{idx:03d}"
-                merged_findings.append(entry)
+        # Sequentially re-index findings F-001, F-002, ... for clean contiguous IDs
+        merged_findings = []
+        for idx, finding in enumerate(raw_concatenated, start=1):
+            entry = dict(finding)
+            entry["id"] = f"F-{idx:03d}"
+            merged_findings.append(entry)
 
-            # Verification check: verify mathematical consistency
-            computed_total = len(merged_findings)
-            if summary["total_findings"] != computed_total:
-                self._log(f"Warning: Reconciling count delta ({summary['total_findings']} vs {computed_total})")
-                summary["total_findings"] = computed_total
+        # Bulletproof mathematical re-summation computed directly over merged_findings
+        # Strictly guarantees: summary.total_findings == sum(severities) == len(findings)
+        summary = {
+            "total_findings": len(merged_findings),
+            "critical": sum(1 for f in merged_findings if f.get("severity") == "critical"),
+            "high": sum(1 for f in merged_findings if f.get("severity") == "high"),
+            "medium": sum(1 for f in merged_findings if f.get("severity") == "medium"),
+            "low": sum(1 for f in merged_findings if f.get("severity") == "low"),
+        }
 
         unified_report = {
             "site": site,

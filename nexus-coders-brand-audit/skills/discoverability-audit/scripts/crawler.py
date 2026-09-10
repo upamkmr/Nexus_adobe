@@ -105,8 +105,15 @@ class BrandAuditCrawler:
         self._crawl_site()
         return self._analyze_with_pandas()
 
-    def _check_robots_txt(self):
-        """Inspects robots.txt for AI-specific crawler disallow directives."""
+    def _safe_get(self, url: str) -> requests.Response:
+        """Attempts verified GET first, falling back to verify=False only upon SSLError (sandbox proxy support)."""
+        try:
+            return self.session.get(url, timeout=self.timeout)
+        except requests.exceptions.SSLError:
+            return self.session.get(url, timeout=self.timeout, verify=False)
+
+    def _check_robots_txt(self) -> Dict[str, Any]:
+        """Fetches and parses robots.txt for AI bot directives."""
         robots_url = f"{self.base_url}/robots.txt"
         blocked_bots = []
         allowed_bots = []
@@ -114,7 +121,7 @@ class BrandAuditCrawler:
         sitemaps = []
 
         try:
-            res = self.session.get(robots_url, timeout=self.timeout, verify=False)
+            res = self._safe_get(robots_url)
             if res.status_code == 200:
                 raw_text = res.text
                 current_agents: List[str] = []
@@ -182,7 +189,7 @@ class BrandAuditCrawler:
         ]
         for url in candidates:
             try:
-                res = self.session.get(url, timeout=self.timeout, verify=False)
+                res = self._safe_get(url)
                 if res.status_code == 200 and len(res.text.strip()) > 20:
                     self.llms_txt_found = True
                     self.llms_txt_url = url
@@ -197,17 +204,18 @@ class BrandAuditCrawler:
         is skipped entirely, never fetched, and never counted against max_pages.
         """
         queue = [self.base_url]
+        visited_urls: Set[str] = set()
         delay = self._robots_delay if self._robots_delay is not None else self.crawl_delay
         first_request = True
 
-        while queue and len(self.crawled_urls) < self.max_pages:
+        while queue and len(self.pages_data) < self.max_pages:
             current_url = queue.pop(0)
-            if current_url in self.crawled_urls:
+            if current_url in visited_urls:
                 continue
+            visited_urls.add(current_url)
 
             if not self._may_fetch(current_url):
-                # Disallowed by robots.txt — record as skipped, never fetched.
-                self.crawled_urls.add(current_url)
+                # Disallowed by robots.txt — record as skipped, never fetched, never counted against max_pages.
                 continue
 
             if not first_request and delay > 0:
@@ -220,13 +228,13 @@ class BrandAuditCrawler:
                 self.pages_data.append(page_metrics)
 
             for link in internal_links:
-                if link not in self.crawled_urls and link not in queue and len(queue) < 100 and self._may_fetch(link):
+                if link not in visited_urls and link not in queue and len(queue) < 100 and self._may_fetch(link):
                     queue.append(link)
 
     def _audit_page(self, url: str) -> (Optional[Dict[str, Any]], List[str]):
         """Fetches and analyzes a single page for machine readability signals."""
         try:
-            res = self.session.get(url, timeout=self.timeout, verify=False)
+            res = self._safe_get(url)
         except Exception as e:
             return None, []
 
@@ -524,42 +532,7 @@ class BrandAuditCrawler:
             finding_idx += 1
 
         # -------------------------------------------------------------
-        # 7. Heading Hierarchy & Reading Density (Engagement / Medium)
-        # -------------------------------------------------------------
-        missing_h1 = df[df["h1_count"] == 0]
-        multiple_h1 = df[df["h1_count"] > 1]
-        if len(missing_h1) > 0 or len(multiple_h1) > 0:
-            findings.append({
-                "id": f"F-{finding_idx:03d}",
-                "title": "Broken Heading Hierarchy Hurting Scannability",
-                "severity": "medium",
-                "evidence": f"{len(missing_h1)} pages lack an H1 heading and {len(multiple_h1)} pages have multiple H1 tags across {total_pages} sampled pages. Confuses screen-readers and AI-referred visitors seeking immediate orientation.",
-                "suggested_action": {
-                    "summary": "Standardize page templates to feature exactly one clear <h1> stating the unique page value proposition, followed by structured <h2> and <h3> subheadings.",
-                    "priority": "medium"
-                }
-            })
-            finding_idx += 1
-
-        # -------------------------------------------------------------
-        # 8. Responsive Viewport Meta Tag (Engagement / High)
-        # -------------------------------------------------------------
-        missing_viewport = df[df["has_viewport"] == False]
-        if len(missing_viewport) > 0:
-            findings.append({
-                "id": f"F-{finding_idx:03d}",
-                "title": "Missing Mobile Viewport Configuration",
-                "severity": "high",
-                "evidence": f"{len(missing_viewport)}/{total_pages} pages lack a responsive viewport meta tag (<meta name='viewport'>), causing layout distortion and high bounce rates on mobile referrals.",
-                "suggested_action": {
-                    "summary": "Ensure <meta name='viewport' content='width=device-width, initial-scale=1.0'> is included in the <head> of every page template.",
-                    "priority": "high"
-                }
-            })
-            finding_idx += 1
-
-        # -------------------------------------------------------------
-        # 9. Freshness & Content Staleness Signals (Low/Medium)
+        # 7. Freshness & Content Staleness Signals (Low)
         # -------------------------------------------------------------
         current_year = datetime.now().year
         stale_copyright_pages = df[df["copyright_year"].apply(lambda y: y is not None and y < current_year - 1)]
@@ -577,7 +550,7 @@ class BrandAuditCrawler:
             finding_idx += 1
 
         # -------------------------------------------------------------
-        # 10. Proactive "Beyond-Defect" Recommendation: FAQPage Microdata
+        # 8. Proactive "Beyond-Defect" Recommendation: FAQPage Microdata
         # -------------------------------------------------------------
         has_faq_schema = any("FAQPage" in types for types in df["schema_types"])
         if not has_faq_schema:

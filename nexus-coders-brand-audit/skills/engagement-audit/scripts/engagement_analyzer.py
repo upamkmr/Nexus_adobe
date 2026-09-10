@@ -61,12 +61,19 @@ class EngagementAnalyzer:
         self._robot_parser: Optional[urllib.robotparser.RobotFileParser] = None
         self._robots_delay: Optional[float] = None
 
+    def _safe_get(self, url: str) -> requests.Response:
+        """Attempts verified GET first, falling back to verify=False only upon SSLError (sandbox proxy support)."""
+        try:
+            return self.session.get(url, timeout=self.timeout)
+        except requests.exceptions.SSLError:
+            return self.session.get(url, timeout=self.timeout, verify=False)
+
     def _load_robots(self):
         try:
             rp = urllib.robotparser.RobotFileParser()
             robots_url = f"{self.base_url}/robots.txt"
             rp.set_url(robots_url)
-            res = self.session.get(robots_url, timeout=self.timeout, verify=False)
+            res = self._safe_get(robots_url)
             rp.parse(res.text.splitlines() if res.status_code == 200 else [])
             self._robot_parser = rp
             try:
@@ -93,16 +100,19 @@ class EngagementAnalyzer:
 
     def _crawl_site(self):
         queue = [self.base_url]
+        visited_urls: Set[str] = set()
         delay = self._robots_delay if self._robots_delay is not None else self.crawl_delay
         first_request = True
 
-        while queue and len(self.crawled_urls) < self.max_pages:
+        while queue and len(self.pages_data) < self.max_pages:
             current_url = queue.pop(0)
-            if current_url in self.crawled_urls:
+            if current_url in visited_urls:
                 continue
+            visited_urls.add(current_url)
+
             if not self._may_fetch(current_url):
-                self.crawled_urls.add(current_url)
                 continue
+
             if not first_request and delay > 0:
                 time.sleep(delay)
             first_request = False
@@ -113,12 +123,12 @@ class EngagementAnalyzer:
                 self.pages_data.append(page_metrics)
 
             for link in internal_links:
-                if link not in self.crawled_urls and link not in queue and len(queue) < 100 and self._may_fetch(link):
+                if link not in visited_urls and link not in queue and len(queue) < 100 and self._may_fetch(link):
                     queue.append(link)
 
     def _analyze_page(self, url: str):
         try:
-            res = self.session.get(url, timeout=self.timeout, verify=False)
+            res = self._safe_get(url)
         except Exception:
             return None, []
 
