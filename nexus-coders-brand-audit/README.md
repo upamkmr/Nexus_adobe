@@ -28,7 +28,9 @@ nexus-coders-brand-audit/
 ├── README.md                       <- Root documentation explaining composition and execution
 └── skills/
     ├── audit-orchestrator/         <- [ENTRYPOINT] Coordinates audit pipeline & emits final JSON report
-    │   └── SKILL.md
+    │   ├── SKILL.md
+    │   └── scripts/
+    │       └── orchestrator.py     <- Single entrypoint runner & mathematical merge engine
     ├── discoverability-audit/      <- Dedicated skill for off-site AI readiness checks
     │   ├── SKILL.md
     │   ├── scripts/
@@ -49,7 +51,7 @@ Both `discoverability-audit` and `engagement-audit` are **self-contained and det
 
 ```mermaid
 flowchart TD
-    User["User / Agent Request (Target URL)"] --> Entrypoint["skills/audit-orchestrator\n(Designated Entrypoint in marketplace.json)"]
+    User["User / Agent Request (Target URL)"] --> Entrypoint["skills/audit-orchestrator\n(scripts/orchestrator.py)"]
     
     subgraph Discoverability ["Off-Site AI Discoverability"]
         Entrypoint --> DiscSkill["skills/discoverability-audit"]
@@ -65,10 +67,10 @@ flowchart TD
         EngScript -.qualitative judgment calls.-> CheckRef["references/checklist.md"]
     end
 
-    DiscFindings --> Synthesizer["Correlation & Proactive Recommendations Engine"]
-    Corrob --> Synthesizer
-    EngFindings --> Synthesizer
-    Synthesizer --> FinalReport["Single Unified Audit Report\n(Strict JSON Schema)"]
+    DiscFindings --> MergeEngine["Orchestrator Merge Engine\n• Mathematical Sum of Severity Counts\n• Sequential Findings Concatenation (F-001...)\n• Proactive Recommendations Synthesis"]
+    Corrob --> MergeEngine
+    EngFindings --> MergeEngine
+    MergeEngine --> FinalReport["Single Unified Audit Report\n(Strict JSON Schema Floor)"]
 ```
 
 ---
@@ -76,13 +78,15 @@ flowchart TD
 ## 3. Skills Breakdown
 
 ### A. `audit-orchestrator` (Designated Entrypoint)
-- **Role**: Coordinates the overall audit lifecycle.
+- **Role**: Coordinates the overall audit lifecycle and emits the single unified audit report.
+- **Engine**: [scripts/orchestrator.py](skills/audit-orchestrator/scripts/orchestrator.py) — executes both `crawler.py` and `engagement_analyzer.py`, captures outputs, mathematically sums the severity counts (`total_findings`, `critical`, `high`, `medium`, `low`), and concatenates findings into a single sequentially-indexed array (`F-001`, `F-002`, ...).
 - **Actions**:
   - Ingests and normalizes the target domain.
   - Dispatches tasks to `discoverability-audit` and `engagement-audit`.
-  - Merges quantitative data with qualitative retention heuristics.
+  - Mathematically sums summary counts from both sub-skills.
+  - Concatenates findings and prevents duplicate ID collisions.
   - Synthesizes proactive "beyond-defect" suggestions.
-  - Emits the validated JSON audit report.
+  - Emits the validated, single unified JSON audit report.
 
 ### B. `discoverability-audit` (Off-Site AI Readiness)
 - **Role**: Tests whether AI retrieval bots can crawl, extract, and corroborate facts.
@@ -106,8 +110,19 @@ flowchart TD
 - Python 3.8+
 - Required packages: `requests`, `beautifulsoup4`, `pandas` (install via `pip install requests beautifulsoup4 pandas`)
 
-### Direct CLI Audit
-Run either analyzer directly on any target domain — both are self-contained CLIs:
+### Single Entrypoint Unified Audit (Recommended)
+Run the orchestrator directly to perform an end-to-end audit, merge results, and emit the Single Unified Audit Report:
+```bash
+python3 skills/audit-orchestrator/scripts/orchestrator.py https://example.com --max-pages 15 --output unified_audit_report.json
+```
+
+Or merge two previously generated raw reports directly:
+```bash
+python3 skills/audit-orchestrator/scripts/orchestrator.py --from-files discoverability_raw.json engagement_raw.json --output unified_audit_report.json
+```
+
+### Standalone Sub-Skill CLIs
+Each sub-skill analyzer can also be run independently outside the marketplace:
 ```bash
 python3 skills/discoverability-audit/scripts/crawler.py https://example.com --max-pages 15 --output discoverability_report.json
 python3 skills/engagement-audit/scripts/engagement_analyzer.py https://example.com --max-pages 10 --output engagement_report.json

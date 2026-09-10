@@ -48,6 +48,27 @@ echo "3b. Smoke testing engagement_analyzer.py..."
 python3 "$MARKETPLACE_DIR/skills/engagement-audit/scripts/engagement_analyzer.py" --help > /dev/null
 echo "   ✓ engagement_analyzer.py CLI test passed."
 
+echo "3c. Smoke testing orchestrator.py & merge logic..."
+python3 "$MARKETPLACE_DIR/skills/audit-orchestrator/scripts/orchestrator.py" --help > /dev/null
+python3 -c "
+import json, subprocess, tempfile, os, sys
+d1 = {'site': 'ex.com', 'summary': {'total_findings': 2, 'critical': 1, 'high': 1, 'medium': 0, 'low': 0}, 'findings': [{'id': 'F-001', 'severity': 'critical', 'title': 'C1'}, {'id': 'F-002', 'severity': 'high', 'title': 'H1'}]}
+d2 = {'site': 'ex.com', 'summary': {'total_findings': 1, 'critical': 0, 'high': 0, 'medium': 1, 'low': 0}, 'findings': [{'id': 'F-001', 'severity': 'medium', 'title': 'M1'}]}
+f1, f2, out = tempfile.NamedTemporaryFile('w', delete=False), tempfile.NamedTemporaryFile('w', delete=False), tempfile.NamedTemporaryFile('w', delete=False)
+json.dump(d1, f1); f1.close()
+json.dump(d2, f2); f2.close()
+out.close()
+subprocess.run([sys.executable, '$MARKETPLACE_DIR/skills/audit-orchestrator/scripts/orchestrator.py', '--from-files', f1.name, f2.name, '--output', out.name, '--quiet'], check=True)
+with open(out.name) as fp:
+    res = json.load(fp)
+assert res['summary']['total_findings'] == 3
+assert res['summary']['critical'] == 1 and res['summary']['high'] == 1 and res['summary']['medium'] == 1 and res['summary']['low'] == 0
+assert len(res['findings']) == 3
+assert [f['id'] for f in res['findings']] == ['F-001', 'F-002', 'F-003']
+os.remove(f1.name); os.remove(f2.name); os.remove(out.name)
+print('   ✓ orchestrator.py CLI & merge test passed.')
+"
+
 echo "4. Generating $ZIP_NAME..."
 rm -f "$ZIP_NAME"
 # Zip the marketplace contents per Adobe guidelines

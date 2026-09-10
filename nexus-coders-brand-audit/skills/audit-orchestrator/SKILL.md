@@ -1,6 +1,6 @@
 ---
 name: audit-orchestrator
-description: Entrypoint orchestrator skill for the nexus-coders-brand-audit marketplace. Coordinates the discoverability-audit and engagement-audit skills, both of which run deterministic, robots.txt-respecting crawls and emit quantitative, evidence-backed findings; merges their outputs, synthesizes proactive beyond-defect recommendations, and emits the final unified JSON audit report. Use whenever a full brand AI-readiness and engagement audit is requested for any website or domain.
+description: Entrypoint orchestrator skill for the nexus-coders-brand-audit marketplace. Coordinates the discoverability-audit and engagement-audit skills, both of which run deterministic, robots.txt-respecting crawls and emit quantitative, evidence-backed findings; executes both analyzers, captures outputs, mathematically sums severity counts into a unified summary block, concatenates findings into a single array, and emits the final unified JSON audit report. Use whenever a full brand AI-readiness and engagement audit is requested for any website or domain.
 license: Apache-2.0
 allowed-tools: Bash, WebSearch
 ---
@@ -26,12 +26,18 @@ Activate this skill when:
    - Normalize the input string into a fully qualified HTTPS URL and extract the canonical domain name (`netloc`).
    - Validate sandbox constraints: ensure strictly read-only HTTP `GET`/`HEAD` requests; no mutating or authenticated operations.
 
-2. **Execute Off-Site Discoverability Audit**:
-   - Trigger the `discoverability-audit` skill by running its bundled Pandas-powered crawler:
+2. **Automated Single-Entrypoint Orchestration**:
+   - The primary execution path is the entrypoint script `skills/audit-orchestrator/scripts/orchestrator.py`, which executes both sub-skills, captures their outputs, and performs the mathematical merge:
      ```bash
-     python3 skills/discoverability-audit/scripts/crawler.py <target-url> --max-pages 15 --output ./discoverability_raw.json
+     python3 skills/audit-orchestrator/scripts/orchestrator.py <target-url> --max-pages 15 --output ./unified_audit_report.json
      ```
-   - Ingest quantitative metrics covering:
+   - Alternatively, when running sub-skills separately in multi-agent pipelines, merge their captured JSON outputs via:
+     ```bash
+     python3 skills/audit-orchestrator/scripts/orchestrator.py --from-files ./discoverability_raw.json ./engagement_raw.json --output ./unified_audit_report.json
+     ```
+
+3. **Sub-Skill 1: Off-Site Discoverability Audit**:
+   - The orchestrator dispatches the `discoverability-audit` skill (`skills/discoverability-audit/scripts/crawler.py`) to gather quantitative metrics:
      - `robots.txt` AI crawler disallows (`GPTBot`, `ClaudeBot`, `PerplexityBot`, etc.) — an informational finding about the *site*.
      - `llms.txt` and `/.well-known/llms.txt` presence.
      - Schema.org JSON-LD coverage across sampled pages.
@@ -42,12 +48,8 @@ Activate this skill when:
    - Note: the crawler's *own* traffic separately respects the site's `robots.txt` via `RobotFileParser` — it never fetches a disallowed path, regardless of what it reports about AI bots.
    - After the crawl, follow `skills/discoverability-audit/references/corroboration-guide.md` to spot-check up to 3 load-bearing factual claims against independent web sources (using this skill's `WebSearch` access) and fold any contradicted/uncorroborated results into the findings list.
 
-3. **Execute On-Site Engagement & Retention Audit**:
-   - Trigger the `engagement-audit` skill by running its bundled analyzer, which performs its own independent, robots.txt-respecting crawl:
-     ```bash
-     python3 skills/engagement-audit/scripts/engagement_analyzer.py <target-url> --max-pages 10 --output ./engagement_raw.json
-     ```
-   - Ingest quantitative metrics covering:
+4. **Sub-Skill 2: On-Site Engagement & Retention Audit**:
+   - The orchestrator dispatches the `engagement-audit` skill (`skills/engagement-audit/scripts/engagement_analyzer.py`), which performs its own independent, robots.txt-respecting crawl:
      - Above-the-fold value proposition clarity (`<h1>` count/uniqueness and specificity — the 5-second test).
      - Navigation orientation and breadcrumb trails for deep-linked arrivals.
      - Long unbroken prose blocks and reading scannability.
@@ -55,25 +57,25 @@ Activate this skill when:
      - Mobile viewport tag presence and image-dimension attributes (layout-shift risk).
    - For qualitative nuance the script cannot statically measure (rendered CLS, tap-target sizing, hero-visual quality), consult `skills/engagement-audit/references/checklist.md`.
 
-4. **Correlate, Deduplicate, and Prioritize Findings**:
-   - Assign sequential IDs (`F-001`, `F-002`, ...).
-   - Assign calibrated severities (`critical`, `high`, `medium`, `low`) based on impact:
-     - `critical`: Direct technical blocks stopping AI crawlers entirely (e.g. `robots.txt` blocking AI bots) or complete site inaccessibility.
-     - `high`: Major barriers preventing fact extraction or driving bounces (missing JSON-LD on key pages, JS hydration skeletons, missing mobile viewport, entity ambiguity).
-     - `medium`: Friction hurting scannability or indexing efficiency (images missing alt text, broken heading hierarchy, missing `llms.txt`).
-     - `low`: Minor heuristic signals (stale copyright year).
+5. **Deterministic Orchestrator Merge & Mathematical Summation**:
+   - The orchestrator merges both outputs into a **Single Unified Audit Report**:
+     - **Mathematical Summation**: Computes the exact sum of counts across both sub-skills into one single summary block:
+       - `summary.total_findings = disc_summary.total_findings + eng_summary.total_findings`
+       - `summary.critical = disc_summary.critical + eng_summary.critical`
+       - `summary.high = disc_summary.high + eng_summary.high`
+       - `summary.medium = disc_summary.medium + eng_summary.medium`
+       - `summary.low = disc_summary.low + eng_summary.low`
+     - **Findings Concatenation & Re-indexing**: Concatenates both `findings` lists into a single unified array and re-indexes all findings sequentially (`F-001`, `F-002`, `F-003`, ...) to eliminate duplicate ID collisions and provide a contiguous, prioritized list.
+     - **Schema Integrity**: Validates that `summary.total_findings == len(findings)` and that each category count strictly reflects the findings in the array.
 
-5. **Incorporate Proactive "Beyond-Problem" Recommendations**:
-   - In addition to fixing detected defects, generate forward-looking enhancements that actively boost AI citation share and visitor retention:
+6. **Incorporate Proactive "Beyond-Problem" Recommendations**:
+   - In addition to fixing detected defects, synthesize forward-looking enhancements that actively boost AI citation share and visitor retention:
      - Suggest publishing a comprehensive `llms.txt` and `llms-full.txt` documentation manifest.
      - Propose Schema.org `FAQPage` or `HowTo` structured data to capture direct conversational question-and-answer snippets in Perplexity and Google AI Overviews.
      - Propose interactive instant-utility widgets (e.g., live preview, ROI calculator) to engage deep-linked visitors immediately upon arrival.
 
-6. **Validate and Emit Unified Audit Report**:
-   - Validate that the output strictly adheres to the required schema:
-     - Root object has `site`, `audited_at` (ISO 8601), `summary` (`total_findings`, `critical`, `high`, `medium`), and `findings` array.
-     - Each finding contains `id`, `title`, `severity`, `evidence`, and `suggested_action` (`summary`, `priority`).
-     - Summary counts match the exact number of findings by severity.
+7. **Validate and Emit Unified Audit Report**:
+   - Emit a single JSON document strictly conforming to the required schema floor. Emitting multiple separate JSON files is prohibited.
 
 ## Output Schema
 

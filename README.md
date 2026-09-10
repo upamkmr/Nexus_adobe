@@ -10,6 +10,7 @@ The complete Agent Skill Marketplace package is located in:
 - **Marketplace Manifest**: [`nexus-coders-brand-audit/marketplace.json`](./nexus-coders-brand-audit/marketplace.json)
 - **Marketplace Documentation**: [`nexus-coders-brand-audit/README.md`](./nexus-coders-brand-audit/README.md)
 - **Entrypoint Skill**: [`nexus-coders-brand-audit/skills/audit-orchestrator/SKILL.md`](./nexus-coders-brand-audit/skills/audit-orchestrator/SKILL.md)
+- **Orchestrator Merge Engine**: [`nexus-coders-brand-audit/skills/audit-orchestrator/scripts/orchestrator.py`](./nexus-coders-brand-audit/skills/audit-orchestrator/scripts/orchestrator.py)
 - **Discoverability Audit Skill**: [`nexus-coders-brand-audit/skills/discoverability-audit/SKILL.md`](./nexus-coders-brand-audit/skills/discoverability-audit/SKILL.md)
 - **Pandas Crawler Script**: [`nexus-coders-brand-audit/skills/discoverability-audit/scripts/crawler.py`](./nexus-coders-brand-audit/skills/discoverability-audit/scripts/crawler.py)
 - **Engagement Audit Skill**: [`nexus-coders-brand-audit/skills/engagement-audit/SKILL.md`](./nexus-coders-brand-audit/skills/engagement-audit/SKILL.md)
@@ -23,7 +24,14 @@ To validate all skills and generate the submission zip file (`nexus-coders-brand
 ```
 
 ## Running an Audit
-Both audit skills are self-contained CLIs that respect `robots.txt` and only make read-only GET requests:
+### Single Entrypoint Unified Audit (Recommended)
+Run the orchestrator to execute both audits, merge findings, and emit the Single Unified Audit Report:
+```bash
+python3 nexus-coders-brand-audit/skills/audit-orchestrator/scripts/orchestrator.py https://example.com --max-pages 15 --output unified_audit_report.json
+```
+
+### Standalone Sub-Skill CLIs
+Both audit skills are also self-contained CLIs that respect `robots.txt` and only make read-only GET requests:
 ```bash
 python3 nexus-coders-brand-audit/skills/discoverability-audit/scripts/crawler.py https://example.com --max-pages 15 --output discoverability_report.json
 python3 nexus-coders-brand-audit/skills/engagement-audit/scripts/engagement_analyzer.py https://example.com --max-pages 10 --output engagement_report.json
