@@ -1,0 +1,11 @@
+{
+  "name": "brand-ai-readiness-audit",
+  "version": "1.0.0",
+  "description": "Audits any website for AI-assistant discoverability and on-site visitor engagement, producing a single prioritized, evidence-backed report.",
+  "skills": [
+    { "id": "audit-orchestrator", "path": "skills/audit-orchestrator", "entrypoint": true },
+    { "id": "crawl-render-audit", "path": "skills/crawl-render-audit" },
+    { "id": "engagement-audit", "path": "skills/engagement-audit" },
+    { "id": "freshness-corroboration", "path": "skills/freshness-corroboration" }
+  ]
+}
