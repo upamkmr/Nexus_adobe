@@ -1,13 +1,25 @@
 ---
 name: audit-orchestrator
-description: Designated entrypoint orchestrator skill for the nexus-coders-brand-audit marketplace. Coordinates two specialized sub-skills (discoverability-audit and engagement-audit), executes audits, captures quantitative outputs, performs cross-skill correlation and mathematical summation, and emits the Single Unified Audit Report strictly conforming to the required schema. Use whenever a full website or domain brand audit is requested.
+description: Designated entrypoint orchestrator skill for the nexus-coders-brand-audit marketplace. Coordinates specialized sub-skills (discoverability-audit and engagement-audit), executes audits, captures quantitative outputs, performs cross-skill correlation and mathematical summation, synthesizes an executive summary, and emits the Single Unified Audit Report strictly conforming to the required schema floor. Use whenever a full website brand audit is requested.
+version: 2.0.0
+author: Nexus Coders
 license: Apache-2.0
-allowed-tools: Bash, WebSearch
+allowed-tools:
+  - bash
+  - read_file
+  - write_file
+dependencies:
+  - requests>=2.28.0
+  - beautifulsoup4>=4.11.0
+  - pandas>=1.4.0
+  - tldextract>=3.0.0
 ---
 
 # Audit Orchestrator (Brand AI-Readiness & Engagement Audit)
 
-The `audit-orchestrator` skill is the primary entrypoint for the **Nexus Coders Brand Audit Marketplace**. It receives an audit request for any target website, orchestrates two specialized sub-skills covering off-site AI discoverability (including entity corroboration and freshness) and on-site visitor retention (including AI-summary/email-digest readiness), and emits the final unified audit report.
+The `audit-orchestrator` skill is the primary designated entrypoint for the **Nexus Coders Brand Audit Marketplace**. It receives an audit request for any target website, orchestrates specialized sub-skills covering off-site AI discoverability (including entity corroboration, freshness, and Appendix E personalization) and on-site visitor retention (including Appendix F AI email-summary readiness), and emits the final unified audit report.
+
+For full architectural and IPC specifications, see [orchestration-protocol.md](file:///home/iron-man/.gemini/antigravity-ide/scratch/Nexus_adobe/nexus-coders-brand-audit/skills/audit-orchestrator/references/orchestration-protocol.md).
 
 ## When to use
 Activate this skill when:
@@ -23,7 +35,7 @@ Activate this skill when:
 ## Procedure (Numbered, Deterministic Steps)
 
 1. **Target Normalization & Sandbox Guardrail Verification**:
-   - Normalize the input string into a canonical HTTPS URL and extract the registrable domain.
+   - Normalize the input string into a canonical HTTPS URL and extract the registrable domain using TLD-aware parsing.
    - Enforce read-only GET/HEAD requests; verify that no modifying, authenticated, or rate-abusive actions are performed.
 
 2. **Automated Single-Entrypoint Orchestration**:
@@ -42,15 +54,15 @@ Activate this skill when:
      - XML Sitemap discovery in `robots.txt` and at `/sitemap.xml`.
      - `llms.txt` and `/.well-known/llms.txt` presence for LLM context windows.
      - Schema.org JSON-LD structured data coverage across sampled pages.
-     - Client-side JS rendering gaps (SPA shells with framework markers).
-     - Facts locked in non-text media: images missing `alt`, canvas graphics, PDF-only.
+     - Advanced raw-vs-rendered JS ingestion gaps (empty SPA containers, text-to-markup ratios, hydration blobs, `<noscript>` warnings).
+     - Facts locked in non-text media: images missing `alt`, canvas graphics, PDF-only content.
      - Canonical URL tag coverage.
      - Cross-web entity disambiguation via Wikipedia/Wikidata API (brand naming collisions).
      - Authoritative `sameAs` knowledge graph links (Wikidata, LinkedIn, Crunchbase).
      - Content freshness signals (copyright staleness, `Last-Modified` headers).
      - OpenGraph metadata completeness for AI personalization (Appendix E).
      - hreflang locale tags for geographically personalized AI responses (Appendix E).
-     - AI-summary content ratios — pages with high image-to-text ratios poorly suited for email digests (Appendix F).
+     - Schema.org Audience & persona targeting declarations (Appendix E).
 
 4. **Sub-Skill 2: On-Site Engagement & AI-Summary Readiness (`engagement-audit`)**:
    - Executes `skills/engagement-audit/scripts/engagement_analyzer.py` to evaluate:
@@ -59,17 +71,19 @@ Activate this skill when:
      - Long unbroken prose blocks and reading density.
      - Call-to-Action (CTA) friction and pages with zero detectable CTA (dead ends).
      - Mobile viewport tag presence and layout-shift risk (images missing dimensions).
-     - AI email-digest content readiness — pages where visual content dominates with minimal extractable text (Appendix F).
+     - AI email-digest content readiness — pages where visual content dominates with minimal extractable text, opening boilerplate filler displacement, and preheader optimization (Appendix F).
      - Above-the-fold personalization density — whether first-visible content gives AI assistants enough to match user context (Appendix E).
 
 5. **Cross-Skill Synthesis & Mathematical Resummation**:
    - The orchestrator merges all outputs into a **Single Unified Audit Report**:
      - **Mathematical Summation**: `summary.total_findings = sum(severities) == len(findings)`.
      - **Findings Concatenation & Re-indexing**: Sequential `F-001`, `F-002`… to eliminate ID collisions.
-     - **Deduplication & Cross-Skill Correlation**: Merges overlapping findings (e.g., entity + email-summary) while preserving evidence.
+     - **Deduplication & Cross-Skill Correlation**: Merges overlapping findings while preserving evidence.
+     - **Executive Summary Generation**: Calculates an overall AI readiness score (0–100), health grades, category breakdowns, and top prioritized recommendations.
 
 6. **Proactive "Beyond-Problem" Opportunities**:
    - Synthesizes non-obvious proactive enhancements:
+     - Structured Claim Provenance (`ClaimReview` / `citation` markup) for AI search verification confidence.
      - Schema.org `FAQPage` for conversational AI citations.
      - `llms.txt` context manifest for LLM token ingestion.
      - Instant-value widgets and context-aware referrer personalization for AI-referred visitors.
@@ -90,6 +104,20 @@ Activate this skill when:
     "medium": 3,
     "low": 0
   },
+  "executive_summary": {
+    "overall_ai_readiness_score": 75,
+    "readiness_grade": "C (Fair - Optimization Required)",
+    "top_priorities": [
+      "[CRITICAL] AI Assistant Crawlers Blocked in robots.txt: Update robots.txt to explicitly allow AI crawlers...",
+      "[HIGH] Deficient Schema.org JSON-LD Structured Data: Inject Schema.org JSON-LD on every page..."
+    ],
+    "category_scores": {
+      "off_site_discoverability": {"score": 70, "status": "Needs Improvement"},
+      "on_site_engagement": {"score": 85, "status": "Good with Opportunities"},
+      "email_ai_summary_readiness": {"score": 70, "status": "Needs Improvement"}
+    },
+    "executive_brief": "Website 'example.com' scored 75/100..."
+  },
   "findings": [
     {
       "id": "F-001",
@@ -97,8 +125,8 @@ Activate this skill when:
       "severity": "critical",
       "evidence": "robots.txt disallows GPTBot, ClaudeBot...",
       "suggested_action": {
-        "summary": "Update robots.txt to allow AI crawlers:\n\nUser-agent: GPTBot\nAllow: /",
-        "priority": "high"
+        "summary": "Update robots.txt to explicitly allow AI crawlers on public documentation:\n\nUser-agent: GPTBot\nAllow: /",
+        "priority": "critical"
       }
     }
   ]

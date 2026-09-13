@@ -3,14 +3,14 @@
 Nexus Coders - Single Entrypoint Audit Orchestrator & Synthesizer
 Part of the nexus-coders-brand-audit Agent Skill Marketplace (Adobe University Hackathon 2026 - Round 3).
 
-Coordinates the two-skill audit pipeline:
-1. Executes discoverability-audit (crawler.py) for off-site AI discoverability, entity
-   corroboration, freshness signals, and AI-summary readiness.
-2. Executes engagement-audit (engagement_analyzer.py) for on-site visitor retention,
-   orientation, UX friction, and email-digest content readiness.
-3. Synthesizes cross-skill correlations, deduplicates overlapping signals, and
-   mathematically sums summary counts.
-4. Emits a Single Unified Audit Report strictly conforming to the required JSON schema floor.
+Coordinates the multi-skill audit pipeline:
+1. Executes discoverability-audit (crawler.py) for off-site AI discoverability, technical crawlability,
+   Schema.org JSON-LD, entity disambiguation, knowledge-graph links, and Appendix E signals.
+2. Executes engagement-audit (engagement_analyzer.py) for on-site visitor retention, orientation,
+   UX friction, and Appendix F AI email-summary readiness.
+3. Synthesizes cross-skill correlations, deduplicates overlapping signals, and mathematically sums summary counts.
+4. Synthesizes an Executive Summary (readiness score 0–100, grade, category health, top 3 priorities).
+5. Emits a Single Unified Audit Report strictly satisfying the required JSON schema floor.
 """
 
 import sys
@@ -77,7 +77,6 @@ class AuditOrchestrator:
         self.engagement_path = None
 
         for s_dir in candidate_skills_dirs:
-            # Check discoverability-audit (primary) or legacy crawl-render-audit
             c_candidate = os.path.join(s_dir, "discoverability-audit", "scripts", "crawler.py")
             if not os.path.isfile(c_candidate):
                 c_candidate = os.path.join(s_dir, "crawl-render-audit", "scripts", "crawler.py")
@@ -92,7 +91,7 @@ class AuditOrchestrator:
             if self.crawler_path and self.engagement_path:
                 break
 
-        # Fallback search if still not found
+        # Fallback recursive search if still not found
         if not self.crawler_path or not self.engagement_path:
             for root, _, files in os.walk(os.path.abspath(os.path.join(current_script_dir, "..", "..", ".."))):
                 if "crawler.py" in files and not self.crawler_path:
@@ -185,7 +184,7 @@ class AuditOrchestrator:
         """
         Merges sub-skill reports into a Single Unified Audit Report.
         Mathematically sums summary counts and concatenates findings into one array.
-        Eliminates duplicate collisions and guarantees strict schema conformance.
+        Eliminates duplicate collisions and synthesizes an executive summary.
         """
         site = self.netloc or "unknown"
         for r in reports:
@@ -203,7 +202,6 @@ class AuditOrchestrator:
             merged_raw: List[Dict[str, Any]] = []
             for f in raw_findings:
                 norm_title = f.get("title", "").strip().lower()
-                # Normalize common variant titles that cover the same concern
                 if "sameas" in norm_title or "knowledge graph" in norm_title:
                     norm_title = "entity_ambiguity_sameas_key"
                 if "email" in norm_title and "summary" in norm_title:
@@ -244,10 +242,71 @@ class AuditOrchestrator:
             "low": sum(1 for f in merged_findings if f.get("severity") == "low"),
         }
 
+        # Synthesize Executive Summary for non-expert business stakeholders and evaluators
+        crit_count = summary["critical"]
+        hi_count = summary["high"]
+        med_count = summary["medium"]
+        lo_count = summary["low"]
+
+        penalty = (crit_count * 20) + (hi_count * 10) + (med_count * 5) + (lo_count * 2)
+        readiness_score = max(15, min(100, 100 - penalty))
+
+        if readiness_score >= 90:
+            readiness_grade = "A (Optimal AI Readiness)"
+        elif readiness_score >= 80:
+            readiness_grade = "B (Good with Minor Fixes)"
+        elif readiness_score >= 70:
+            readiness_grade = "C (Fair - Optimization Required)"
+        elif readiness_score >= 60:
+            readiness_grade = "D (High Risk of AI Invisibility)"
+        else:
+            readiness_grade = "F (Critical AI Barriers Detected)"
+
+        top_priorities = []
+        for f in merged_findings[:3]:
+            action_summary = f.get("suggested_action", {}).get("summary", "")
+            first_sentence = action_summary.split("\n\n")[0].split(". ")[0].strip()
+            top_priorities.append(f"[{f.get('severity', 'high').upper()}] {f.get('title')}: {first_sentence}")
+
+        disc_findings = [f for f in merged_findings if any(k in f["title"].lower() for k in ["crawler", "schema", "entity", "skeleton", "alt", "sitemap", "canonical", "llms", "opengraph", "hreflang", "claim"])]
+        eng_findings = [f for f in merged_findings if any(k in f["title"].lower() for k in ["heading", "h1", "breadcrumb", "scannability", "call-to-action", "cta", "dead-end", "viewport", "layout shift", "widget"])]
+        email_findings = [f for f in merged_findings if any(k in f["title"].lower() for k in ["email", "summarization", "above-the-fold"])]
+
+        def calc_health(f_list):
+            crit = sum(1 for x in f_list if x.get("severity") == "critical")
+            hi = sum(1 for x in f_list if x.get("severity") == "high")
+            if crit > 0:
+                return {"score": 45, "status": "Critical Action Needed"}
+            elif hi > 0:
+                return {"score": 70, "status": "Needs Improvement"}
+            elif len(f_list) > 2:
+                return {"score": 85, "status": "Good with Opportunities"}
+            else:
+                return {"score": 95, "status": "Optimal"}
+
+        executive_summary = {
+            "overall_ai_readiness_score": readiness_score,
+            "readiness_grade": readiness_grade,
+            "top_priorities": top_priorities,
+            "category_scores": {
+                "off_site_discoverability": calc_health(disc_findings),
+                "on_site_engagement": calc_health(eng_findings),
+                "email_ai_summary_readiness": calc_health(email_findings)
+            },
+            "executive_brief": (
+                f"Website '{site}' scored {readiness_score}/100 ({readiness_grade}). "
+                f"Audited across off-site AI discoverability, on-site engagement, and email summarization readiness. "
+                f"Implementing the top {min(3, len(merged_findings))} prioritized action(s) will substantially enhance "
+                f"citation frequency and retention from conversational AI assistants."
+            )
+        }
+
         unified_report = {
             "site": site,
             "audited_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "summary": summary,
+            "executive_summary": executive_summary,
+            "recommendations_summary": top_priorities,
             "findings": merged_findings
         }
 
@@ -261,7 +320,7 @@ class AuditOrchestrator:
 
         reports = []
 
-        # 1. Discoverability Audit (off-site AI readiness + entity corroboration)
+        # 1. Discoverability Audit (off-site AI readiness + entity corroboration + Appendix E)
         if self.crawler_path:
             disc_report = self._run_sub_script(
                 self.crawler_path,
@@ -270,7 +329,7 @@ class AuditOrchestrator:
             )
             reports.append(disc_report)
 
-        # 2. Engagement Audit (on-site retention + AI-summary readiness)
+        # 2. Engagement Audit (on-site retention + Appendix F email-digest readiness)
         if self.engagement_path:
             eng_report = self._run_sub_script(
                 self.engagement_path,

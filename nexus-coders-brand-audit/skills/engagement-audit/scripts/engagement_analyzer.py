@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 """
-Nexus Coders - On-Site Engagement, Retention & AI-Summary Readiness Engine
+Nexus Coders - On-Site Visitor Engagement & Retention Analyzer
 Part of the nexus-coders-brand-audit Agent Skill Marketplace (Adobe University Hackathon 2026 - Round 3).
 
-Deterministically samples pages on a target site and scores them against
-on-site retention dimensions: above-the-fold value proposition clarity,
-deep-link orientation, scannability/information density, CTA clarity,
-mobile viewport readiness, AND AI-summary/email-digest content readiness
-(Appendix F: ensuring key content survives AI summarization in emails,
-search snippets, and chat answers).
+Evaluates on-site visitor retention, reading experience, and content readiness:
+  1. Above-The-Fold Value Proposition (H1 clarity, "5-second test", vague headlines)
+  2. Deep-Link Navigation & Orientation (Breadcrumbs, persistent header nav for AI referrals)
+  3. Reading Scannability & Information Density (Heading progression, wall-of-text paragraphs)
+  4. Call-to-Action (CTA) Friction (Vague copy, dead-end pages lacking conversion pathways)
+  5. Mobile Viewport & Cumulative Layout Shift (Responsive viewport, explicit image dimensions)
+  6. Email-Digest & AI-Summary Content Readiness (Appendix F: text-vs-image ratio,
+     preheader optimization, opening boilerplate displacement detection)
+  7. Above-The-Fold Personalization Density (Appendix E: substantive first-visible text)
+  8. Proactive Instant-Value Retention Widget (Context retention for AI-referred visitors)
 
-Read-only: GET requests only, respects robots.txt, polite crawl delay.
+Uses Pandas for vectorized metric aggregation.
+Read-only, robots.txt-self-enforcing, polite crawl delays, SSL-resilient.
 """
 
-import re
 import sys
+import os
+import re
 import json
 import time
 import argparse
@@ -27,19 +33,46 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 
+# Suppress insecure request warnings in sandboxed environments
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-AUDIT_USER_AGENT = "NexusCodersAuditBot/1.0 (+https://github.com/upamkmr/Nexus_adobe; read-only brand audit)"
+AUDIT_USER_AGENT = "NexusCodersAuditBot/2.0 (+https://github.com/upamkmr/Nexus_adobe; read-only brand audit)"
 
-# Vague CTA phrases that give a visitor no sense of what happens next.
-VAGUE_CTA_PHRASES = {"click here", "here", "learn more", "read more", "more", "go", "submit", "link"}
-# Long, unbroken prose block threshold (~ >5 lines of continuous text).
-LONG_PROSE_CHAR_THRESHOLD = 800
+VAGUE_H1_PATTERNS = [
+    r"^welcome\b",
+    r"^home\b",
+    r"^empower(?:ing)?\b",
+    r"^transform(?:ing)?\b",
+    r"^the future of\b",
+    r"^innovat(?:e|ion)\b",
+    r"^unleash\b",
+    r"^next-?gen(?:eration)?\b",
+    r"^re-?defin(?:e|ing)\b",
+    r"^build better\b",
+    r"^hello\b",
+]
+
+VAGUE_CTA_PHRASES = {
+    "click here", "learn more", "more", "read more", "see more", "explore",
+    "continue", "go", "submit", "get started", "view more", "discover"
+}
+
+BOILERPLATE_FILLER_PATTERNS = [
+    r"view\s+in\s+browser",
+    r"having\s+trouble\s+viewing",
+    r"click\s+here\s+to\s+unsubscribe",
+    r"forward\s+to\s+a\s+friend",
+    r"skip\s+to\s+(?:main\s+)?content",
+    r"cookie\s+preferences",
+    r"privacy\s+policy\s+\|\s+terms"
+]
+
+LONG_PROSE_CHAR_THRESHOLD = 450
 
 
 class EngagementAnalyzer:
-    """Safe, read-only analyzer for on-site visitor retention and AI-summary readiness."""
+    """Safe, read-only analyzer for on-site visitor retention, reading experience, and email readiness."""
 
     def __init__(self, base_url: str, max_pages: int = 10, timeout: int = 6, crawl_delay: float = 0.4):
         parsed = urllib.parse.urlparse(base_url)
@@ -48,43 +81,35 @@ class EngagementAnalyzer:
             parsed = urllib.parse.urlparse(base_url)
         self.base_url = f"{parsed.scheme}://{parsed.netloc}"
         self.netloc = parsed.netloc.lower()
-        self.max_pages = max(1, min(max_pages, 50))
+        self.max_pages = max(1, min(max_pages, 30))
         self.timeout = timeout
         self.crawl_delay = crawl_delay
+
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": AUDIT_USER_AGENT,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.5"
         })
+
         self.crawled_urls: Set[str] = set()
         self.pages_data: List[Dict[str, Any]] = []
         self._robot_parser: Optional[urllib.robotparser.RobotFileParser] = None
         self._robots_delay: Optional[float] = None
 
-    def _safe_get(self, url: str) -> requests.Response:
-        """Attempts verified GET first, falling back to verify=False only upon SSLError."""
+    def _init_robots(self):
+        robots_url = urllib.parse.urljoin(self.base_url, "/robots.txt")
         try:
-            return self.session.get(url, timeout=self.timeout)
-        except requests.exceptions.SSLError:
-            return self.session.get(url, timeout=self.timeout, verify=False)
-
-    def _load_robots(self):
-        try:
-            rp = urllib.robotparser.RobotFileParser()
-            robots_url = f"{self.base_url}/robots.txt"
-            rp.set_url(robots_url)
-            res = self._safe_get(robots_url)
-            rp.parse(res.text.splitlines() if res.status_code == 200 else [])
-            self._robot_parser = rp
-            try:
-                delay = rp.crawl_delay(AUDIT_USER_AGENT) or rp.crawl_delay("*")
-                if delay:
-                    self._robots_delay = float(delay)
-            except Exception:
-                pass
+            res = self.session.get(robots_url, timeout=self.timeout, verify=False)
+            if res.status_code == 200 and res.text:
+                self._robot_parser = urllib.robotparser.RobotFileParser()
+                self._robot_parser.set_url(robots_url)
+                self._robot_parser.parse(res.text.splitlines())
+                cd = self._robot_parser.crawl_delay(AUDIT_USER_AGENT)
+                if cd is not None:
+                    self._robots_delay = min(float(cd), 3.0)
         except Exception:
-            self._robot_parser = None
+            pass
 
     def _may_fetch(self, url: str) -> bool:
         if self._robot_parser is None:
@@ -95,88 +120,89 @@ class EngagementAnalyzer:
             return True
 
     def run(self) -> Dict[str, Any]:
-        self._load_robots()
+        """Executes the polite engagement analysis crawl and generates findings."""
+        self._init_robots()
         self._crawl_site()
         return self._analyze_with_pandas()
 
     def _crawl_site(self):
         queue = [self.base_url]
-        visited_urls: Set[str] = set()
         delay = self._robots_delay if self._robots_delay is not None else self.crawl_delay
-        first_request = True
 
-        while queue and len(self.pages_data) < self.max_pages:
+        while queue and len(self.crawled_urls) < self.max_pages:
             current_url = queue.pop(0)
-            if current_url in visited_urls:
+            if current_url in self.crawled_urls:
                 continue
-            visited_urls.add(current_url)
 
             if not self._may_fetch(current_url):
                 continue
 
-            if not first_request and delay > 0:
-                time.sleep(delay)
-            first_request = False
-
-            page_metrics, internal_links = self._analyze_page(current_url)
             self.crawled_urls.add(current_url)
-            if page_metrics:
-                self.pages_data.append(page_metrics)
+            page_data, links = self._analyze_page(current_url)
+            if page_data:
+                self.pages_data.append(page_data)
 
-            for link in internal_links:
-                if link not in visited_urls and link not in queue and len(queue) < 100 and self._may_fetch(link):
-                    queue.append(link)
+            for link in links:
+                if link not in self.crawled_urls and link not in queue:
+                    if len(queue) + len(self.crawled_urls) < self.max_pages * 2:
+                        queue.append(link)
 
-    def _analyze_page(self, url: str):
+            time.sleep(delay)
+
+    def _analyze_page(self, url: str) -> (Optional[Dict[str, Any]], List[str]):
         try:
-            res = self._safe_get(url)
+            res = self.session.get(url, timeout=self.timeout, verify=False, allow_redirects=True)
+            if res.status_code != 200:
+                return None, []
+            content_type = res.headers.get("content-type", "").lower()
+            if "text/html" not in content_type:
+                return None, []
         except Exception:
             return None, []
 
-        if res.status_code != 200:
-            # Discard error pages (404/500) so error markup does not skew engagement metrics
-            return None, []
-
-        content_type = res.headers.get("content-type", "").lower()
-        if "text/html" not in content_type:
-            return None, []
-
         soup = BeautifulSoup(res.text, "html.parser")
-        new_links: List[str] = []
-        for a in soup.find_all("a", href=True):
-            joined = urllib.parse.urljoin(url, a["href"].strip())
-            p = urllib.parse.urlparse(joined)
-            if p.netloc.lower() == self.netloc and p.scheme in ["http", "https"]:
-                clean_url = urllib.parse.urlunparse((p.scheme, p.netloc, p.path, "", "", ""))
-                if not any(clean_url.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".pdf", ".zip", ".svg", ".css", ".js"]):
-                    new_links.append(clean_url)
 
-        # --- 1. Above-the-fold value proposition clarity ---
+        # Discover internal links for crawling
+        new_links = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"].split("#")[0].strip()
+            if not href or href.startswith(("mailto:", "tel:", "javascript:")):
+                continue
+            abs_url = urllib.parse.urljoin(url, href)
+            p = urllib.parse.urlparse(abs_url)
+            if p.netloc.lower() == self.netloc:
+                clean = f"{p.scheme}://{p.netloc}{p.path}"
+                if clean not in new_links:
+                    new_links.append(clean)
+
+        # --- 1. Above-The-Fold H1 value proposition ---
         h1_tags = soup.find_all("h1")
         h1_count = len(h1_tags)
-        h1_text = h1_tags[0].get_text(strip=True) if h1_tags else ""
+        h1_text = h1_tags[0].get_text(separator=" ", strip=True) if h1_tags else ""
         h1_len = len(h1_text)
-        vague_h1 = bool(h1_text) and not re.search(r"[a-zA-Z]{4,}\s+[a-zA-Z]{2,}", h1_text)
+        vague_h1 = False
+        if h1_text:
+            for pat in VAGUE_H1_PATTERNS:
+                if re.search(pat, h1_text, re.I):
+                    vague_h1 = True
+                    break
 
-        # --- 2. Landing orientation & context retention (deep-link arrival) ---
-        has_breadcrumb_nav = soup.find("nav", attrs={"aria-label": re.compile(r"breadcrumb", re.I)}) is not None
-        has_breadcrumb_schema = False
-        for script in soup.find_all("script", type=lambda t: t and "ld+json" in t.lower()):
-            try:
-                data = json.loads(script.string or "{}")
-                items = data if isinstance(data, list) else [data]
-                for item in items:
-                    t = item.get("@type", "")
-                    if isinstance(t, list):
-                        if "BreadcrumbList" in t:
-                            has_breadcrumb_schema = True
-                    elif t == "BreadcrumbList":
-                        has_breadcrumb_schema = True
-            except Exception:
-                continue
-        has_breadcrumb = has_breadcrumb_nav or has_breadcrumb_schema
-        has_persistent_nav = soup.find("nav") is not None or soup.find("header") is not None
-        is_deep_page = urllib.parse.urlparse(url).path not in ("", "/")
+        # --- 2. Deep-link orientation & breadcrumbs ---
+        path = urllib.parse.urlparse(url).path.strip("/")
+        depth = len(path.split("/")) if path else 0
+        is_deep_page = depth >= 2
+
+        has_breadcrumb = bool(
+            soup.find("nav", attrs={"aria-label": re.compile(r"breadcrumb", re.I)}) or
+            soup.find("ol", class_=re.compile(r"breadcrumb", re.I)) or
+            soup.find("ul", class_=re.compile(r"breadcrumb", re.I)) or
+            soup.find(attrs={"itemtype": re.compile(r"BreadcrumbList", re.I)})
+        )
+        has_persistent_nav = bool(
+            soup.find("header") or
+            soup.find("nav", attrs={"role": "navigation"}) or
+            soup.find(class_=re.compile(r"navbar|header|nav-bar", re.I))
+        )
 
         # --- 3. Information density & scannability ---
         h1c, h2c, h3c = len(soup.find_all("h1")), len(soup.find_all("h2")), len(soup.find_all("h3"))
@@ -202,25 +228,37 @@ class EngagementAnalyzer:
         images_missing_dims = sum(1 for img in images if not (img.get("width") and img.get("height")))
 
         # --- 6. AI-Summary & Email-Digest Content Readiness (Appendix F) ---
-        # Strip scripts/styles for clean text extraction
+        # Strip invisible elements for text extraction
         for invisible in soup(["script", "style", "noscript", "svg"]):
             invisible.extract()
         plain_text = soup.get_text(separator=" ", strip=True)
         text_length = len(plain_text)
 
-        # Heading-to-text ratio: does the page use headings to structure content?
+        # Opening 250 characters: check for boilerplate filler displacement
+        opening_text = plain_text[:250].strip().lower()
+        has_opening_boilerplate = any(re.search(pat, opening_text) for pat in BOILERPLATE_FILLER_PATTERNS)
+
+        # Check for email preheader
+        has_email_preheader = bool(
+            soup.find(class_=re.compile(r"preheader", re.I)) or
+            soup.find(id=re.compile(r"preheader", re.I)) or
+            soup.find("div", style=re.compile(r"display\s*:\s*none.*max-height\s*:\s*0", re.I))
+        )
+
+        # Heading-to-text progression
         total_headings = h1c + h2c + h3c
         has_good_heading_structure = total_headings >= 2 and h2c >= 1
 
-        # AI summarizer readability: can an AI extract the key message from this page?
-        # Low text + high images = poor summarization candidate
-        # Also check if there's meaningful content in the first 500 chars (above-the-fold text)
+        # Above-the-fold content density (first 500 chars) — Appendix E
         above_fold_text = plain_text[:500].strip()
-        has_substantive_above_fold = len(above_fold_text) > 100 and re.search(r"[a-zA-Z]{4,}\s+[a-zA-Z]{3,}\s+[a-zA-Z]{2,}", above_fold_text)
+        has_substantive_above_fold = len(above_fold_text) > 100 and bool(re.search(r"[a-zA-Z]{4,}\s+[a-zA-Z]{3,}\s+[a-zA-Z]{2,}", above_fold_text))
 
-        # Email-digest specific: pages that rely heavily on visual presentation
-        # with minimal extractable text would have their content dropped by AI email summarizers
-        is_email_summary_poor = (text_length < 300 and total_images > 2) or (text_length > 0 and total_images / max(text_length / 200, 1) > 5)
+        # Email-digest readiness: high image count with low text or high boilerplate
+        is_email_summary_poor = (
+            (text_length < 300 and total_images > 2) or
+            (text_length > 0 and total_images / max(text_length / 200, 1) > 5) or
+            (has_opening_boilerplate and text_length < 800)
+        )
 
         record = {
             "url": url,
@@ -241,6 +279,8 @@ class EngagementAnalyzer:
             "total_images": total_images,
             "images_missing_dims": images_missing_dims,
             "text_length": text_length,
+            "has_opening_boilerplate": has_opening_boilerplate,
+            "has_email_preheader": has_email_preheader,
             "has_good_heading_structure": has_good_heading_structure,
             "has_substantive_above_fold": has_substantive_above_fold,
             "is_email_summary_poor": is_email_summary_poor,
@@ -248,6 +288,7 @@ class EngagementAnalyzer:
         return record, new_links
 
     def _analyze_with_pandas(self) -> Dict[str, Any]:
+        """Converts engagement telemetry into a Pandas DataFrame and emits prioritized findings with code snippets."""
         if not self.pages_data:
             return {
                 "site": self.netloc,
@@ -255,11 +296,11 @@ class EngagementAnalyzer:
                 "summary": {"total_findings": 1, "critical": 1, "high": 0, "medium": 0, "low": 0},
                 "findings": [{
                     "id": "F-001",
-                    "title": "Site Inaccessible for Engagement Analysis",
+                    "title": "Site Unreachable for Engagement Audit",
                     "severity": "critical",
-                    "evidence": f"Failed to crawl any valid HTML pages from {self.base_url} (blocked by robots.txt, network error, or non-HTML responses).",
+                    "evidence": f"Could not sample HTML pages from {self.base_url} within timeout limit.",
                     "suggested_action": {
-                        "summary": "Verify domain availability and confirm robots.txt permits standard crawler access to public marketing pages.",
+                        "summary": "Check server availability and ensure network requests are permitted.",
                         "priority": "high"
                     }
                 }]
@@ -271,68 +312,88 @@ class EngagementAnalyzer:
         finding_idx = 1
 
         # =====================================================================
-        # 1. Missing / duplicate H1 (value proposition clarity)
+        # 1. Above-The-Fold Value Proposition (H1 Clarity)
         # =====================================================================
         no_h1 = df[df["h1_count"] == 0]
         multi_h1 = df[df["h1_count"] > 1]
-        if len(no_h1) > 0 or len(multi_h1) > 0:
+        vague_h1 = df[df["vague_h1"] == True]
+
+        if len(no_h1) > 0:
             findings.append({
                 "id": f"F-{finding_idx:03d}",
-                "title": "Unclear Above-the-Fold Value Proposition (Missing or Duplicate H1)",
+                "title": "Missing Primary Heading (H1) on Key Landing Pages",
                 "severity": "high",
-                "evidence": f"{len(no_h1)}/{total_pages} pages have no <h1> and {len(multi_h1)}/{total_pages} have more than one, so a visitor cannot identify the page's core value proposition within the 5-second test.",
+                "evidence": f"{len(no_h1)}/{total_pages} sampled pages have no <h1> heading. Visitors referred by AI assistants arrive without an immediate anchor explaining what page they landed on.",
                 "suggested_action": {
                     "summary": (
-                        "Give every page exactly one <h1> stating what the product/service does and who it's for "
-                        "in plain language, under ~60 characters. Example:\n\n"
-                        "<h1>Cloud Cost Optimization for AWS Teams</h1>\n\n"
-                        "Avoid vague branding phrases like '<h1>Empowering Innovation</h1>'."
+                        "Add exactly one clear, benefit-driven <h1> heading above the fold on every page template:\n\n"
+                        '<h1>Nexus Stream: Real-Time Event Broker with Sub-Millisecond Latency</h1>'
                     ),
                     "priority": "high"
                 }
             })
             finding_idx += 1
 
-        # =====================================================================
-        # 2. Vague/short H1 headlines
-        # =====================================================================
-        vague_h1_pages = df[(df["vague_h1"] == True) & (df["h1_count"] > 0)]
-        if len(vague_h1_pages) / total_pages > 0.3:
+        if len(vague_h1) > 0:
+            examples = [f"'{row['h1_text'][:50]}'" for _, row in vague_h1.head(2).iterrows()]
             findings.append({
                 "id": f"F-{finding_idx:03d}",
-                "title": "Vague or Jargon-Heavy Headlines",
+                "title": "Vague or Buzzword-Heavy Primary Headline (Fails 5-Second Test)",
                 "severity": "medium",
-                "evidence": f"{len(vague_h1_pages)}/{total_pages} sampled pages have an <h1> that reads as a single vague word/phrase rather than a concrete statement of what the offering is.",
+                "evidence": (
+                    f"{len(vague_h1)}/{total_pages} pages use generic or buzzword-heavy <h1> copy "
+                    f"(e.g. {', '.join(examples)}) that fails to state what the product does within 5 seconds."
+                ),
                 "suggested_action": {
-                    "summary": "Rewrite headlines to state a concrete capability and audience (e.g. 'Cloud Cost Optimization for AWS' instead of generic branding phrases).",
+                    "summary": (
+                        "Rewrite the <h1> using the concrete clarity formula: [Product] helps [Audience] achieve [Benefit] without [Pain]:\n\n"
+                        "❌ 'Transforming the Future of Data'\n"
+                        "✅ 'Real-Time Vector Search for Kubernetes Workloads'"
+                    ),
                     "priority": "medium"
                 }
             })
             finding_idx += 1
 
+        if len(multi_h1) / total_pages > 0.3:
+            findings.append({
+                "id": f"F-{finding_idx:03d}",
+                "title": "Multiple Competing H1 Headings Dilute Topic Focus",
+                "severity": "low",
+                "evidence": f"{len(multi_h1)}/{total_pages} pages have more than one <h1>, confusing both reading hierarchy and AI citation parsers.",
+                "suggested_action": {
+                    "summary": "Enforce a strict single-H1 rule per page; demote secondary section titles to <h2>.",
+                    "priority": "low"
+                }
+            })
+            finding_idx += 1
+
         # =====================================================================
-        # 3. Deep pages lacking orientation (breadcrumbs / persistent nav)
+        # 2. Deep-Link Navigation & Orientation
         # =====================================================================
         deep_pages = df[df["is_deep_page"] == True]
         if len(deep_pages) > 0:
-            unoriented = deep_pages[(deep_pages["has_breadcrumb"] == False) & (deep_pages["has_persistent_nav"] == False)]
-            if len(unoriented) > 0:
+            missing_crumbs = deep_pages[deep_pages["has_breadcrumb"] == False]
+            if len(missing_crumbs) / len(deep_pages) > 0.5:
                 findings.append({
                     "id": f"F-{finding_idx:03d}",
-                    "title": "Deep-Linked Pages Lack Orientation for AI-Referred Visitors",
+                    "title": "Missing Breadcrumbs on Deep-Link Landing Pages",
                     "severity": "high",
-                    "evidence": f"{len(unoriented)}/{len(deep_pages)} non-homepage pages have neither a breadcrumb trail nor a persistent nav/header, leaving visitors who click through from an AI citation with no way to identify the brand or navigate to related content.",
+                    "evidence": (
+                        f"{len(missing_crumbs)}/{len(deep_pages)} deep sub-pages lack breadcrumb navigation. "
+                        f"When an AI assistant cites a specific technical doc or article, referred visitors land deep "
+                        f"without context of where they are in the site hierarchy, increasing bounce rates."
+                    ),
                     "suggested_action": {
                         "summary": (
-                            "Add a persistent site header and semantic breadcrumbs to every template:\n\n"
+                            "Implement semantic breadcrumb navigation with Schema.org markup on all deep pages:\n\n"
                             '<nav aria-label="Breadcrumb">\n'
-                            '  <ol>\n'
+                            '  <ol class="breadcrumb">\n'
                             '    <li><a href="/">Home</a></li>\n'
-                            '    <li><a href="/products">Products</a></li>\n'
-                            '    <li aria-current="page">Current Page</li>\n'
+                            '    <li><a href="/docs">Documentation</a></li>\n'
+                            '    <li aria-current="page">API Reference</li>\n'
                             '  </ol>\n'
-                            '</nav>\n\n'
-                            "Also add Schema.org BreadcrumbList JSON-LD for machine-readable navigation paths."
+                            '</nav>'
                         ),
                         "priority": "high"
                     }
@@ -340,25 +401,32 @@ class EngagementAnalyzer:
                 finding_idx += 1
 
         # =====================================================================
-        # 4. Long unbroken prose blocks (scannability)
+        # 3. Reading Scannability & Information Density
         # =====================================================================
         prose_heavy = df[df["long_prose_blocks"] > 0]
-        if len(prose_heavy) / total_pages > 0.25:
+        if len(prose_heavy) / total_pages > 0.3:
             total_blocks = int(df["long_prose_blocks"].sum())
             findings.append({
                 "id": f"F-{finding_idx:03d}",
                 "title": "Unbroken Prose Blocks Hurt Scannability",
                 "severity": "medium",
-                "evidence": f"{len(prose_heavy)}/{total_pages} pages contain at least one paragraph exceeding ~{LONG_PROSE_CHAR_THRESHOLD} characters with no sub-headings or bullets; {total_blocks} such blocks found in total.",
+                "evidence": f"{len(prose_heavy)}/{total_pages} pages contain paragraphs exceeding ~{LONG_PROSE_CHAR_THRESHOLD} characters with no sub-headings or bullets ({total_blocks} such blocks detected).",
                 "suggested_action": {
-                    "summary": "Break long paragraphs into scannable bullet lists, short paragraphs (2-3 sentences), and labeled sub-sections; surface key facts in bolded callouts.",
+                    "summary": (
+                        "Break dense paragraphs into scannable subsections with bolded takeaways and bullet lists:\n\n"
+                        '<h3>Key Capabilities</h3>\n'
+                        '<ul>\n'
+                        '  <li><strong>Sub-millisecond latency:</strong> Process events under 1ms.</li>\n'
+                        '  <li><strong>Zero-copy architecture:</strong> Reduce memory overhead by 60%.</li>\n'
+                        '</ul>'
+                    ),
                     "priority": "medium"
                 }
             })
             finding_idx += 1
 
         # =====================================================================
-        # 5. CTA clarity & friction
+        # 4. CTA Clarity & Conversion Friction
         # =====================================================================
         pages_with_ctas = df[df["total_ctas"] > 0]
         if len(pages_with_ctas) > 0:
@@ -368,36 +436,43 @@ class EngagementAnalyzer:
             if vague_pct > 30:
                 findings.append({
                     "id": f"F-{finding_idx:03d}",
-                    "title": "Ambiguous Call-to-Action Copy",
+                    "title": "Ambiguous Call-to-Action Copy Increases Friction",
                     "severity": "medium",
-                    "evidence": f"{total_vague}/{total_ctas} ({vague_pct}%) of detected CTA buttons/links use vague copy (e.g. 'Click Here', 'Learn More') that doesn't tell the visitor what happens next.",
+                    "evidence": f"{total_vague}/{total_ctas} ({vague_pct}%) of detected CTAs use ambiguous copy (e.g. 'Click Here', 'Learn More') that does not communicate the destination value.",
                     "suggested_action": {
                         "summary": (
-                            "Replace vague CTA copy with specific action verbs describing the outcome:\n\n"
-                            "❌ 'Learn More' → ✅ 'Read the API Docs'\n"
-                            "❌ 'Click Here' → ✅ 'Start Free Trial'\n"
-                            "❌ 'Submit'     → ✅ 'Book a Demo'"
+                            "Replace ambiguous CTA text with explicit, action-oriented button copy:\n\n"
+                            '<a href="/signup" class="btn-primary">Start 14-Day Free Trial (No Credit Card)</a>\n'
+                            '<a href="/docs/quickstart" class="btn-secondary">Explore 5-Minute Quickstart</a>'
                         ),
                         "priority": "medium"
                     }
                 })
                 finding_idx += 1
+
         no_cta_pages = df[df["total_ctas"] == 0]
         if len(no_cta_pages) / total_pages > 0.4:
             findings.append({
                 "id": f"F-{finding_idx:03d}",
-                "title": "Pages With No Detectable Call-to-Action (Dead Ends)",
+                "title": "Dead-End Pages Lacking Next-Step Conversion Pathways",
                 "severity": "high",
-                "evidence": f"{len(no_cta_pages)}/{total_pages} sampled pages have no identifiable button or CTA element, risking dead ends for visitors who arrive without a clear next step.",
+                "evidence": f"{len(no_cta_pages)}/{total_pages} sampled pages have no button or action link, stranding visitors who arrive from AI citations without a recommended next step.",
                 "suggested_action": {
-                    "summary": "Add at least one clear primary CTA (and a low-commitment secondary option) to every page template, especially deep content and documentation pages.",
+                    "summary": (
+                        "Add a persistent next-steps block to every content and documentation template:\n\n"
+                        '<div class="next-steps-banner">\n'
+                        '  <h3>Ready to implement?</h3>\n'
+                        '  <a href="/deploy" class="btn-cta">Deploy in 5 Minutes</a>\n'
+                        '  <a href="/community" class="link-secondary">Join Developer Slack</a>\n'
+                        '</div>'
+                    ),
                     "priority": "high"
                 }
             })
             finding_idx += 1
 
         # =====================================================================
-        # 6. Mobile viewport configuration
+        # 5. Mobile Viewport Configuration
         # =====================================================================
         missing_viewport = df[df["has_viewport"] == False]
         if len(missing_viewport) > 0:
@@ -405,10 +480,10 @@ class EngagementAnalyzer:
                 "id": f"F-{finding_idx:03d}",
                 "title": "Missing Mobile Viewport Configuration",
                 "severity": "high",
-                "evidence": f"{len(missing_viewport)}/{total_pages} pages lack a responsive viewport meta tag, causing distorted layouts on mobile AI-assistant referrals.",
+                "evidence": f"{len(missing_viewport)}/{total_pages} pages lack a responsive viewport meta tag, causing unreadable desktop-scaled layouts on mobile AI referrals.",
                 "suggested_action": {
                     "summary": (
-                        "Add this tag to the <head> of every page template:\n\n"
+                        "Add the responsive viewport meta tag to every page template <head>:\n\n"
                         '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
                     ),
                     "priority": "high"
@@ -417,7 +492,7 @@ class EngagementAnalyzer:
             finding_idx += 1
 
         # =====================================================================
-        # 7. Layout shift risk (images missing dimensions)
+        # 6. Cumulative Layout Shift Risk (Images Missing Dimensions)
         # =====================================================================
         total_images = int(df["total_images"].sum())
         missing_dims = int(df["images_missing_dims"].sum())
@@ -427,12 +502,11 @@ class EngagementAnalyzer:
                 "id": f"F-{finding_idx:03d}",
                 "title": "Cumulative Layout Shift Risk (Images Missing Width/Height)",
                 "severity": "low",
-                "evidence": f"{missing_dims}/{total_images} ({pct}%) images lack explicit width/height attributes, causing layout jumps during load.",
+                "evidence": f"{missing_dims}/{total_images} ({pct}%) images lack explicit width/height attributes, causing sudden content jumps during asynchronous load.",
                 "suggested_action": {
                     "summary": (
-                        "Set explicit dimensions on every <img>:\n\n"
-                        '<img src="hero.jpg" width="1200" height="630" alt="Product screenshot">\n\n'
-                        "Or use CSS aspect-ratio: aspect-ratio: 16/9;"
+                        "Include explicit width and height attributes on all image elements to reserve layout space:\n\n"
+                        '<img src="hero-graphic.png" width="800" height="450" alt="Platform Overview" loading="lazy" />'
                     ),
                     "priority": "low"
                 }
@@ -440,29 +514,31 @@ class EngagementAnalyzer:
             finding_idx += 1
 
         # =====================================================================
-        # 8. AI-Summary & Email-Digest Content Readiness (Appendix F)
+        # 7. AI Email-Digest & Inbox Summarization Readiness (Appendix F)
         # =====================================================================
         email_poor_pages = df[df["is_email_summary_poor"] == True]
         if len(email_poor_pages) > 0:
             example_urls = email_poor_pages["url"].head(2).tolist()
+            boilerplate_count = int(df["has_opening_boilerplate"].sum())
+            extra_context = f" {boilerplate_count} page(s) begin with low-value boilerplate filler that displaces core messaging in AI summaries." if boilerplate_count else ""
             findings.append({
                 "id": f"F-{finding_idx:03d}",
-                "title": "Content Poorly Structured for AI Email Digests & Summaries",
+                "title": "Content Structure Vulnerable to AI Email Summarization Drops",
                 "severity": "medium",
                 "evidence": (
-                    f"{len(email_poor_pages)}/{total_pages} pages have extremely high image-to-text ratios "
-                    f"(many images, under 300 chars of extractable text). When AI assistants generate email "
-                    f"summaries or inbox digests citing these pages, the important content disappears because "
-                    f"the summarizer has no readable text to work with (see Appendix F). "
+                    f"{len(email_poor_pages)}/{total_pages} pages have high image-to-text ratios or low-value opening filler. "
+                    f"When AI assistants generate inbox summaries or email digests citing these pages, the important message "
+                    f"disappears because the summarizer has no readable text or parses only boilerplate (Appendix F).{extra_context} "
                     f"Examples: {', '.join(example_urls)}."
                 ),
                 "suggested_action": {
                     "summary": (
-                        "Ensure every page carries its core message in plain HTML text, not solely in "
-                        "images or graphics. For email-linked landing pages, lead with a text-first design: "
-                        "a clear headline + 2-3 sentence summary before any hero image. "
-                        "For newsletters and email content, always include a plain-text version and maintain "
-                        "a text-to-image ratio above 60:40."
+                        "Structure email-linked landing pages and newsletters with text-first hierarchy and an invisible preheader:\n\n"
+                        '<!-- AI Summarizer Inbox Preheader -->\n'
+                        '<div style="display:none;font-size:1px;color:#fff;max-height:0px;overflow:hidden;">\n'
+                        '  Nexus v3.0 launched with native sub-millisecond vector indexing and multi-region replication.\n'
+                        '</div>\n\n'
+                        "Maintain at least a 60:40 text-to-image ratio and ensure key value propositions precede any promotional imagery."
                     ),
                     "priority": "medium"
                 }
@@ -470,25 +546,27 @@ class EngagementAnalyzer:
             finding_idx += 1
 
         # =====================================================================
-        # 9. Weak Above-the-Fold Content for AI-Referred Visitors (Appendix E)
+        # 8. Weak Above-the-Fold Personalization Density (Appendix E)
         # =====================================================================
         weak_above_fold = df[df["has_substantive_above_fold"] == False]
         if len(weak_above_fold) / total_pages > 0.3:
             findings.append({
                 "id": f"F-{finding_idx:03d}",
-                "title": "Insufficient Above-the-Fold Text for AI-Personalized Referrals",
+                "title": "Insufficient Above-the-Fold Content for AI-Personalized Referrals",
                 "severity": "medium",
                 "evidence": (
-                    f"{len(weak_above_fold)}/{total_pages} pages have less than 100 characters of substantive "
-                    f"text in the first visible section. AI assistants personalize which content to surface "
-                    f"based on user context (Appendix E); pages with thin above-the-fold text give the "
-                    f"assistant little to match against user intent, reducing citation likelihood."
+                    f"{len(weak_above_fold)}/{total_pages} pages contain less than 100 characters of substantive "
+                    f"text in the first visible section. AI assistants personalize which content to surface based on "
+                    f"user context (Appendix E); pages with thin above-the-fold text provide little context for the "
+                    f"assistant to match against user intent."
                 ),
                 "suggested_action": {
                     "summary": (
-                        "Front-load the first 500 characters of every page with the most important, "
-                        "specific content: what the page offers, who it's for, and why it matters. "
-                        "This helps AI assistants match the page to personalized user queries."
+                        "Front-load the first 500 characters of every page with specific value statements and target audience qualifiers:\n\n"
+                        '<p class="lead-summary">\n'
+                        '  Built for enterprise data engineering teams, Nexus delivers real-time event streaming\n'
+                        '  with automated schema registry and SOC-2 Type II compliance.\n'
+                        '</p>'
                     ),
                     "priority": "medium"
                 }
@@ -496,19 +574,29 @@ class EngagementAnalyzer:
             finding_idx += 1
 
         # =====================================================================
-        # 10. Proactive: Instant-value widget for AI-referred visitors
+        # 9. Proactive: Instant-Value Widget for AI-Referred Visitors
         # =====================================================================
         findings.append({
             "id": f"F-{finding_idx:03d}",
-            "title": "Proactive Opportunity: Instant-Value Widget for AI-Referred Visitors",
+            "title": "Proactive Opportunity: Instant-Value Retention Widget for AI-Referred Visitors",
             "severity": "medium",
-            "evidence": "No structural defect required — this is a proactive retention lever. Visitors who click through from an AI assistant's answer have a specific question in mind and a short attention span before bouncing back to the assistant.",
+            "evidence": (
+                "Proactive retention enhancement: Visitors arriving via deep links from conversational AI assistants "
+                "(ChatGPT, Claude, Perplexity) arrive with specific intent and short attention spans. If they encounter "
+                "a static promotional wall, bounce probability increases substantially."
+            ),
             "suggested_action": {
                 "summary": (
-                    "Add a lightweight interactive element above the fold (ROI/pricing calculator, live search, "
-                    "or interactive product preview) so referred visitors get value within seconds. "
-                    "Consider context-aware referrer personalization: detect AI-assistant referrals and show "
-                    "a tailored welcome banner (e.g., 'Looking for the pricing mentioned by ChatGPT? Here's the full breakdown.')."
+                    "Embed a lightweight interactive element above the fold (interactive calculator, code snippet tester, "
+                    "or AI-referral welcome banner) to deliver instant utility:\n\n"
+                    '<div class="ai-referrer-banner" id="aiWelcome" style="display:none;">\n'
+                    '  <p>👋 Arrived from an AI assistant looking for pricing? <a href="#pricing-calculator">View Interactive Calculator &rarr;</a></p>\n'
+                    '</div>\n'
+                    '<script>\n'
+                    '  if (document.referrer && /chatgpt|claude|perplexity/i.test(document.referrer)) {\n'
+                    '    document.getElementById("aiWelcome").style.display = "block";\n'
+                    '  }\n'
+                    '</script>'
                 ),
                 "priority": "low"
             }
