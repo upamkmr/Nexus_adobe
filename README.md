@@ -7,32 +7,38 @@ The complete Agent Skill Marketplace package is located in:
 👉 **[`nexus-coders-brand-audit/`](./nexus-coders-brand-audit/)**
 
 ## Quick Links
-- **Marketplace Manifest**: [`nexus-coders-brand-audit/marketplace.json`](./nexus-coders-brand-audit/marketplace.json)
-- **Marketplace Documentation**: [`nexus-coders-brand-audit/README.md`](./nexus-coders-brand-audit/README.md)
-- **Entrypoint Skill**: [`nexus-coders-brand-audit/skills/audit-orchestrator/SKILL.md`](./nexus-coders-brand-audit/skills/audit-orchestrator/SKILL.md)
-- **Orchestrator Merge Engine**: [`nexus-coders-brand-audit/skills/audit-orchestrator/scripts/orchestrator.py`](./nexus-coders-brand-audit/skills/audit-orchestrator/scripts/orchestrator.py)
-- **Discoverability Audit Skill**: [`nexus-coders-brand-audit/skills/discoverability-audit/SKILL.md`](./nexus-coders-brand-audit/skills/discoverability-audit/SKILL.md)
-- **Pandas Crawler Script**: [`nexus-coders-brand-audit/skills/discoverability-audit/scripts/crawler.py`](./nexus-coders-brand-audit/skills/discoverability-audit/scripts/crawler.py)
-- **Engagement Audit Skill**: [`nexus-coders-brand-audit/skills/engagement-audit/SKILL.md`](./nexus-coders-brand-audit/skills/engagement-audit/SKILL.md)
-- **Engagement Analyzer Script**: [`nexus-coders-brand-audit/skills/engagement-audit/scripts/engagement_analyzer.py`](./nexus-coders-brand-audit/skills/engagement-audit/scripts/engagement_analyzer.py)
-- **Engagement Retention Checklist**: [`nexus-coders-brand-audit/skills/engagement-audit/references/checklist.md`](./nexus-coders-brand-audit/skills/engagement-audit/references/checklist.md)
+- **Marketplace Manifest**: [`marketplace.json`](./nexus-coders-brand-audit/marketplace.json) (3 skills, 1 entrypoint, v2.0.0)
+- **Marketplace Documentation**: [`README.md`](./nexus-coders-brand-audit/README.md)
+- **Dependencies**: [`requirements.txt`](./nexus-coders-brand-audit/requirements.txt)
+- **Entrypoint Skill**: [`audit-orchestrator/SKILL.md`](./nexus-coders-brand-audit/skills/audit-orchestrator/SKILL.md)
+  - **Orchestrator Engine**: [`orchestrator.py`](./nexus-coders-brand-audit/skills/audit-orchestrator/scripts/orchestrator.py)
+  - **Orchestration Protocol**: [`orchestration-protocol.md`](./nexus-coders-brand-audit/skills/audit-orchestrator/references/orchestration-protocol.md)
+- **Off-Site Discoverability + Entity Corroboration Skill**: [`discoverability-audit/SKILL.md`](./nexus-coders-brand-audit/skills/discoverability-audit/SKILL.md)
+  - **Crawler Script**: [`crawler.py`](./nexus-coders-brand-audit/skills/discoverability-audit/scripts/crawler.py)
+  - **AI Crawler Specification**: [`ai-crawler-spec.md`](./nexus-coders-brand-audit/skills/discoverability-audit/references/ai-crawler-spec.md)
+  - **Structured Claim Provenance Guide**: [`claim-provenance-guide.md`](./nexus-coders-brand-audit/skills/discoverability-audit/references/claim-provenance-guide.md)
+  - **Corroboration Guide**: [`corroboration-guide.md`](./nexus-coders-brand-audit/skills/discoverability-audit/references/corroboration-guide.md)
+- **On-Site Retention + AI-Summary Readiness Skill**: [`engagement-audit/SKILL.md`](./nexus-coders-brand-audit/skills/engagement-audit/SKILL.md)
+  - **Engagement Analyzer**: [`engagement_analyzer.py`](./nexus-coders-brand-audit/skills/engagement-audit/scripts/engagement_analyzer.py)
+  - **Email-Readiness Guide (Appendix F)**: [`email-readiness-guide.md`](./nexus-coders-brand-audit/skills/engagement-audit/references/email-readiness-guide.md)
+  - **Retention Checklist (8 dimensions + Appendix E/F)**: [`checklist.md`](./nexus-coders-brand-audit/skills/engagement-audit/references/checklist.md)
 
 ## Validation & Packaging
-To validate all skills and generate the submission zip file (`nexus-coders-brand-audit.zip`), run:
 ```bash
 ./package_marketplace.sh
 ```
 
 ## Running an Audit
-### Single Entrypoint Unified Audit (Recommended)
-Run the orchestrator to execute both audits, merge findings, and emit the Single Unified Audit Report:
+### Single Entrypoint (Recommended)
 ```bash
 python3 nexus-coders-brand-audit/skills/audit-orchestrator/scripts/orchestrator.py https://example.com --max-pages 15 --output unified_audit_report.json
 ```
 
 ### Standalone Sub-Skill CLIs
-Both audit skills are also self-contained CLIs that respect `robots.txt` and only make read-only GET requests:
 ```bash
+# Off-Site AI Discoverability + Entity Corroboration
 python3 nexus-coders-brand-audit/skills/discoverability-audit/scripts/crawler.py https://example.com --max-pages 15 --output discoverability_report.json
+
+# On-Site Visitor Retention + AI-Summary Readiness
 python3 nexus-coders-brand-audit/skills/engagement-audit/scripts/engagement_analyzer.py https://example.com --max-pages 10 --output engagement_report.json
 ```

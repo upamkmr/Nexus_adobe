@@ -1,7 +1,7 @@
 {
   "name": "nexus-coders-brand-audit",
-  "version": "1.1.0",
-  "description": "Multi-skill Agent Skill Marketplace for automated website brand auditing — evaluating off-site AI discoverability and on-site visitor engagement to produce prioritized, mechanism-sound fixes and proactive improvements.",
+  "version": "2.0.0",
+  "description": "Multi-skill Agent Skill Marketplace for automated website brand auditing — evaluating off-site AI discoverability (crawlability, entity corroboration, freshness, AI-summary readiness), and on-site visitor engagement (retention, orientation, email-digest content readiness) to produce prioritized, mechanism-sound fixes and proactive improvements.",
   "author": "Nexus Coders",
   "license": "Apache-2.0",
   "skills": [
@@ -9,17 +9,17 @@
       "id": "audit-orchestrator",
       "path": "skills/audit-orchestrator",
       "entrypoint": true,
-      "description": "The entrypoint skill that coordinates off-site discoverability and on-site engagement audits, synthesizes proactive recommendations, and emits the final JSON audit report."
+      "description": "The designated entrypoint skill that coordinates specialized sub-skills (discoverability-audit, engagement-audit), synthesizes cross-skill correlations, and emits the final unified JSON audit report."
     },
     {
       "id": "discoverability-audit",
       "path": "skills/discoverability-audit",
-      "description": "Dedicated skill for off-site AI readiness checks: robots.txt AI crawler access (self-enforced, not just reported), llms.txt, JSON-LD structured data, JS-render gaps, facts locked in non-text media (images/canvas/PDF), freshness, and cross-web entity corroboration with a live spot-check for contradicted/mistaken-identity claims."
+      "description": "Unified skill for off-site AI discoverability, entity corroboration, and content readiness: robots.txt AI crawler access, XML sitemap, llms.txt, JSON-LD structured data, JS-render gaps, non-text media trapping, Wikipedia/Wikidata entity disambiguation, sameAs knowledge-graph links, OpenGraph/hreflang personalization, AI-summary content ratios, and temporal freshness."
     },
     {
       "id": "engagement-audit",
       "path": "skills/engagement-audit",
-      "description": "Dedicated skill running its own deterministic, robots.txt-respecting crawl for on-site retention checks: above-the-fold value proposition clarity, landing orientation, information density, CTA friction, and layout-shift risk."
+      "description": "Dedicated skill for on-site visitor retention and AI-summary readiness: above-the-fold value proposition clarity, landing orientation, information density, CTA friction, mobile viewport stability, email-digest content readiness, and above-the-fold personalization density."
     }
   ]
 }

@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 """
-Nexus Coders - AI Discoverability & Crawl Analysis Engine
-Part of the nexus-coders-brand-audit Agent Skill Marketplace (Adobe University Hackathon 2026 - Round 3).
+Off-site AI discoverability + entity corroboration auditor.
 
-Analyzes website crawlability, AI crawler access (robots.txt), JSON-LD structured data,
-JS-render gaps, non-text locked facts, entity corroboration, and freshness signals.
-Uses Pandas for vectorized metric aggregation and empirical evidence generation.
+Crawls a target website (politely, read-only, robots.txt-respecting) and checks
+whether AI retrieval bots can actually find, parse, trust, and cite the brand.
+Covers crawl access, structured data, JS rendering gaps, entity disambiguation,
+personalisation signals, and freshness — basically everything from Appendix A–F
+that lives on the "can machines even see you?" side of the fence.
+
+Outputs a JSON report matching the hackathon schema floor.
 """
 
-import sys
-import os
-import re
-import json
-import time
-import argparse
+import sys, os, re, json, time, argparse
 import urllib.parse
 import urllib.robotparser
 from datetime import datetime, timezone
@@ -23,585 +21,946 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 
-# Suppress insecure request warnings if encountered in sandbox
+try:
+    import tldextract
+except ImportError:
+    tldextract = None  # graceful fallback to manual parsing
+
+# shut up the SSL warnings in sandboxed envs
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Standard User-Agent for polite auditing
-AUDIT_USER_AGENT = "NexusCodersAuditBot/1.0 (+https://github.com/upamkmr/Nexus_adobe; read-only brand audit)"
 
-# Known AI and search assistant crawler bot identifiers
-AI_BOTS = [
-    "GPTBot",
-    "ChatGPT-User",
-    "ClaudeBot",
-    "PerplexityBot",
-    "Google-Extended",
-    "Applebot-Extended",
-    "CCBot",
-    "cohere-ai"
+# ── constants ───────────────────────────────────────────────────────
+
+UA_STRING = (
+    'NexusCodersAuditBot/2.0 '
+    '(+https://github.com/upamkmr/Nexus_adobe; read-only brand audit)'
+)
+
+# bots we check in robots.txt — these are the ones that matter for AI citations
+AI_BOT_TOKENS = [
+    'GPTBot', 'ChatGPT-User', 'ClaudeBot', 'PerplexityBot',
+    'Google-Extended', 'Applebot-Extended', 'CCBot', 'cohere-ai',
 ]
 
-AUTHORITATIVE_ENTITY_DOMAINS = [
-    "wikidata.org",
-    "wikipedia.org",
-    "linkedin.com",
-    "crunchbase.com",
-    "github.com",
-    "twitter.com",
-    "x.com"
+# domains we consider "authoritative" for sameAs entity grounding
+KNOWN_ENTITY_DOMAINS = [
+    'wikidata.org', 'wikipedia.org', 'linkedin.com',
+    'crunchbase.com', 'github.com', 'twitter.com', 'x.com',
 ]
 
+# SPA container IDs that signal client-side-only rendering
+SPA_ROOT_SELECTORS = ['#root', '#app', '#__next', '#__nuxt', 'app-root', '#__svelte']
 
-class BrandAuditCrawler:
-    """Safe, read-only crawler and discoverability auditor."""
 
-    def __init__(self, base_url: str, max_pages: int = 15, timeout: int = 6, crawl_delay: float = 0.4):
-        parsed = urllib.parse.urlparse(base_url)
-        if not parsed.scheme:
-            base_url = "https://" + base_url
-            parsed = urllib.parse.urlparse(base_url)
-        self.base_url = f"{parsed.scheme}://{parsed.netloc}"
-        self.netloc = parsed.netloc.lower()
-        self.max_pages = max(1, min(max_pages, 50))
-        self.timeout = timeout
-        # Politeness delay between requests to this host (guardrail: no rate-abusing actions).
-        self.crawl_delay = crawl_delay
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": AUDIT_USER_AGENT,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5"
-        })
+# ── small helpers ───────────────────────────────────────────────────
 
-        self.crawled_urls: Set[str] = set()
-        self.pages_data: List[Dict[str, Any]] = []
-        self.robots_rules: Dict[str, Any] = {}
-        self.llms_txt_found: bool = False
-        self.llms_txt_url: Optional[str] = None
-        self.sitemap_found: bool = False
-        self.sitemap_urls: List[str] = []
-        # Standard robots.txt compliance for the audit crawler's OWN traffic — this is
-        # separate from the AI-bot-disallow *reporting* logic below, which inspects
-        # whether GPTBot/ClaudeBot/etc. are blocked (that's a finding about the site,
-        # not a constraint on us). This RobotFileParser enforces the guardrail that the
-        # marketplace itself must never crawl paths the site disallows.
-        self._robot_parser: Optional[urllib.robotparser.RobotFileParser] = None
-        self._robots_delay: Optional[float] = None
+def _norm_url(raw: str) -> str:
+    """Slap https:// on if the user forgot it."""
+    p = urllib.parse.urlparse(raw)
+    if not p.scheme:
+        raw = 'https://' + raw
+    return raw
 
-    def _may_fetch(self, url: str) -> bool:
-        """Returns False if robots.txt disallows OUR crawler on this path."""
-        if self._robot_parser is None:
-            return True
+
+def _brand_from_domain(url: str) -> str:
+    """
+    Best-effort brand keyword extraction from the domain.
+    Uses tldextract when available, falls back to manual ccTLD stripping.
+    """
+    if tldextract is not None:
         try:
-            return self._robot_parser.can_fetch(AUDIT_USER_AGENT, url) and self._robot_parser.can_fetch("*", url)
-        except Exception:
-            return True
-
-    def run(self) -> Dict[str, Any]:
-        """Executes the full discoverability audit pipeline."""
-        self._check_robots_txt()
-        self._check_llms_txt()
-        self._crawl_site()
-        return self._analyze_with_pandas()
-
-    def _safe_get(self, url: str) -> requests.Response:
-        """Attempts verified GET first, falling back to verify=False only upon SSLError (sandbox proxy support)."""
-        try:
-            return self.session.get(url, timeout=self.timeout)
-        except requests.exceptions.SSLError:
-            return self.session.get(url, timeout=self.timeout, verify=False)
-
-    def _check_robots_txt(self) -> Dict[str, Any]:
-        """Fetches and parses robots.txt for AI bot directives."""
-        robots_url = f"{self.base_url}/robots.txt"
-        blocked_bots = []
-        allowed_bots = []
-        raw_text = ""
-        sitemaps = []
-
-        try:
-            res = self._safe_get(robots_url)
-            if res.status_code == 200:
-                raw_text = res.text
-                current_agents: List[str] = []
-                for line in raw_text.splitlines():
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    if ":" in line:
-                        directive, value = line.split(":", 1)
-                        directive = directive.strip().lower()
-                        value = value.strip()
-
-                        if directive == "user-agent":
-                            current_agents.append(value)
-                        elif directive == "disallow":
-                            for agent in current_agents:
-                                for bot in AI_BOTS:
-                                    if agent == "*" or bot.lower() in agent.lower():
-                                        if value in ["/", "/*"] and bot not in blocked_bots:
-                                            blocked_bots.append(bot)
-                        elif directive == "allow":
-                            for agent in current_agents:
-                                for bot in AI_BOTS:
-                                    if bot.lower() in agent.lower():
-                                        allowed_bots.append(bot)
-                        elif directive == "sitemap":
-                            sitemaps.append(value)
-                    else:
-                        current_agents = []
+            ext = tldextract.TLDExtract(cache_dir=False)(url)
+            if ext.domain and ext.domain not in ('www', ''):
+                return ext.domain.capitalize()
         except Exception:
             pass
 
-        self.robots_rules = {
-            "exists": bool(raw_text),
-            "blocked_ai_bots": blocked_bots,
-            "sitemaps": sitemaps,
-            "raw_snippet": raw_text[:500]
-        }
-        self.sitemap_urls = sitemaps
+    host = urllib.parse.urlparse(_norm_url(url)).netloc.lower().replace('www.', '')
 
-        # Load a standard RobotFileParser so OUR OWN crawl obeys the site's rules
-        # (guardrail: "Respect robots.txt"), independent of the AI-bot reporting above.
+    # handle multi-part ccTLDs like .co.uk, .com.au etc.
+    multi_tlds = [
+        '.co.uk', '.org.uk', '.gov.uk', '.ac.uk',
+        '.com.au', '.net.au', '.org.au', '.edu.au',
+        '.co.nz', '.co.in', '.gov.in', '.ac.in',
+        '.co.jp', '.ne.jp', '.com.br', '.com.mx',
+        '.com.sg', '.com.hk', '.co.za',
+    ]
+    for suffix in multi_tlds:
+        if host.endswith(suffix):
+            chunk = host[:-len(suffix)].split('.')[-1]
+            if chunk:
+                return chunk.capitalize()
+
+    parts = host.split('.')
+    generic_tlds = {'com', 'org', 'net', 'edu', 'gov', 'io', 'ai', 'co', 'app', 'dev'}
+    if len(parts) >= 2:
+        pick = parts[-2] if parts[-2] not in generic_tlds else parts[0]
+    else:
+        pick = parts[0]
+    return pick.capitalize()
+
+
+def _severity_counts(findings: list) -> dict:
+    """Tally severity buckets for the summary block."""
+    c = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
+    for f in findings:
+        sev = f.get('severity', 'medium')
+        if sev in c:
+            c[sev] += 1
+    c['total_findings'] = len(findings)
+    return c
+
+
+# ── main auditor class ─────────────────────────────────────────────
+
+class DiscoverabilityAuditor:
+    """
+    Crawls a site, gathers signals, then uses pandas to crunch page-level
+    metrics into actionable findings with concrete fix snippets.
+    """
+
+    def __init__(self, base_url: str, max_pages: int = 15,
+                 timeout: int = 6, delay: float = 0.4):
+        self.base_url = _norm_url(base_url)
+        parsed = urllib.parse.urlparse(self.base_url)
+        self.base_url = f'{parsed.scheme}://{parsed.netloc}'
+        self.netloc = parsed.netloc.lower()
+        self.max_pages = max(1, min(max_pages, 50))
+        self.timeout = timeout
+        self.delay = delay
+
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': UA_STRING,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+        })
+
+        self.visited: Set[str] = set()
+        self.page_records: List[Dict[str, Any]] = []
+
+        # robots / sitemap / llms state
+        self.robots_info: Dict[str, Any] = {}
+        self.has_llms_txt = False
+        self.llms_txt_url: Optional[str] = None
+        self.sitemap_urls: List[str] = []
+        self._rp: Optional[urllib.robotparser.RobotFileParser] = None
+        self._crawl_delay_override: Optional[float] = None
+
+        self.brand = _brand_from_domain(self.base_url)
+
+    # ── robots.txt & our own compliance ────────────────────────────
+
+    def _allowed(self, url: str) -> bool:
+        if self._rp is None:
+            return True
         try:
-            rp = urllib.robotparser.RobotFileParser()
-            rp.set_url(robots_url)
-            if raw_text:
-                rp.parse(raw_text.splitlines())
-            else:
-                rp.parse([])
-            self._robot_parser = rp
+            return (self._rp.can_fetch(UA_STRING, url)
+                    and self._rp.can_fetch('*', url))
+        except Exception:
+            return True
+
+    def _parse_robots(self):
+        """Fetch robots.txt: (a) set up our own compliance parser,
+        (b) check which AI bots are blocked — that's a *finding*, not a rule
+        for us."""
+        robots_url = self.base_url + '/robots.txt'
+        self.robots_info = {'present': False, 'blocked_bots': [], 'sitemaps': []}
+        try:
+            r = self.session.get(robots_url, timeout=self.timeout, verify=False)
+            if r.status_code != 200 or not r.text:
+                return
+        except Exception:
+            return
+
+        self.robots_info['present'] = True
+        txt = r.text
+
+        # figure out which AI bots are disallowed
+        cur_agents: list = []
+        for line in txt.splitlines():
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if ':' not in line:
+                cur_agents = []
+                continue
+            key, val = [s.strip() for s in line.split(':', 1)]
+            kl = key.lower()
+            if kl == 'user-agent':
+                cur_agents.append(val)
+            elif kl == 'disallow' and val in ('/', '/*'):
+                for agent in cur_agents:
+                    for bot in AI_BOT_TOKENS:
+                        if bot.lower() == agent.lower() or agent == '*':
+                            if bot not in self.robots_info['blocked_bots']:
+                                self.robots_info['blocked_bots'].append(bot)
+            elif kl == 'sitemap':
+                self.robots_info['sitemaps'].append(val)
+                self.sitemap_urls.append(val)
+
+        # set up compliance parser for our own crawler
+        self._rp = urllib.robotparser.RobotFileParser()
+        self._rp.set_url(robots_url)
+        self._rp.parse(txt.splitlines())
+        cd = self._rp.crawl_delay(UA_STRING)
+        if cd is not None:
+            self._crawl_delay_override = min(float(cd), 3.0)
+
+    def _probe_sitemap(self):
+        """If robots.txt didn't declare a sitemap, try /sitemap.xml directly."""
+        if self.sitemap_urls:
+            return
+        url = self.base_url + '/sitemap.xml'
+        try:
+            r = self.session.head(url, timeout=self.timeout,
+                                  verify=False, allow_redirects=True)
+            if r.status_code == 200:
+                self.sitemap_urls.append(url)
+        except Exception:
+            pass
+
+    def _probe_llms_txt(self):
+        for path in ['/llms.txt', '/.well-known/llms.txt']:
+            target = self.base_url + path
             try:
-                delay = rp.crawl_delay(AUDIT_USER_AGENT) or rp.crawl_delay("*")
-                if delay:
-                    self._robots_delay = float(delay)
+                r = self.session.get(target, timeout=self.timeout, verify=False)
+                # make sure it's real content, not a soft-404
+                if (r.status_code == 200
+                        and len(r.text.strip()) > 30
+                        and '404' not in r.text[:200].lower()):
+                    self.has_llms_txt = True
+                    self.llms_txt_url = target
+                    return
             except Exception:
                 pass
-        except Exception:
-            self._robot_parser = None
 
-    def _check_llms_txt(self):
-        """Checks for the presence of modern /llms.txt or /.well-known/llms.txt."""
-        candidates = [
-            f"{self.base_url}/llms.txt",
-            f"{self.base_url}/.well-known/llms.txt"
-        ]
-        for url in candidates:
-            try:
-                res = self._safe_get(url)
-                if res.status_code == 200 and len(res.text.strip()) > 20:
-                    self.llms_txt_found = True
-                    self.llms_txt_url = url
-                    break
-            except Exception:
-                continue
+    # ── BFS crawl ──────────────────────────────────────────────────
 
-    def _crawl_site(self):
-        """Crawls up to max_pages within the domain to collect evidence.
-
-        Respects robots.txt: any path disallowed to our audit User-Agent (or '*')
-        is skipped entirely, never fetched, and never counted against max_pages.
-        """
+    def _crawl(self):
         queue = [self.base_url]
-        visited_urls: Set[str] = set()
-        delay = self._robots_delay if self._robots_delay is not None else self.crawl_delay
-        first_request = True
+        wait = self._crawl_delay_override or self.delay
 
-        while queue and len(self.pages_data) < self.max_pages:
-            current_url = queue.pop(0)
-            if current_url in visited_urls:
+        while queue and len(self.visited) < self.max_pages:
+            url = queue.pop(0)
+            if url in self.visited:
                 continue
-            visited_urls.add(current_url)
-
-            if not self._may_fetch(current_url):
-                # Disallowed by robots.txt — record as skipped, never fetched, never counted against max_pages.
+            if not self._allowed(url):
                 continue
 
-            if not first_request and delay > 0:
-                time.sleep(delay)
-            first_request = False
+            self.visited.add(url)
+            rec, links = self._fetch_and_extract(url)
+            if rec:
+                self.page_records.append(rec)
 
-            page_metrics, internal_links = self._audit_page(current_url)
-            self.crawled_urls.add(current_url)
-            if page_metrics:
-                self.pages_data.append(page_metrics)
+            for lnk in links:
+                if lnk not in self.visited and lnk not in queue:
+                    if len(queue) + len(self.visited) < self.max_pages * 2:
+                        queue.append(lnk)
 
-            for link in internal_links:
-                if link not in visited_urls and link not in queue and len(queue) < 100 and self._may_fetch(link):
-                    queue.append(link)
+            time.sleep(wait)
 
-    def _audit_page(self, url: str) -> (Optional[Dict[str, Any]], List[str]):
-        """Fetches and analyzes a single page for machine readability signals."""
+    def _fetch_and_extract(self, url: str):
+        """Fetch one page, pull out everything we need for analysis.
+        Returns (record_dict, list_of_internal_links) or (None, [])."""
         try:
-            res = self._safe_get(url)
-        except Exception as e:
+            resp = self.session.get(url, timeout=self.timeout,
+                                    verify=False, allow_redirects=True)
+            if resp.status_code != 200:
+                return None, []
+            if 'text/html' not in resp.headers.get('content-type', '').lower():
+                return None, []
+        except Exception:
             return None, []
 
-        content_type = res.headers.get("content-type", "").lower()
-        if "text/html" not in content_type:
-            return None, []
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        raw_len = len(resp.text)
 
-        soup = BeautifulSoup(res.text, "html.parser")
-        new_links: List[str] = []
+        # -- structured data (JSON-LD) --
+        schemas, types_found, sameas_links = [], [], []
+        has_audience = False
 
-        # Find internal links
-        for a in soup.find_all("a", href=True):
-            href = a["href"].strip()
-            joined = urllib.parse.urljoin(url, href)
-            p = urllib.parse.urlparse(joined)
-            if p.netloc.lower() == self.netloc and p.scheme in ["http", "https"]:
-                # strip fragments and query params for canonical crawling
-                clean_url = urllib.parse.urlunparse((p.scheme, p.netloc, p.path, "", "", ""))
-                if not any(clean_url.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".pdf", ".zip", ".svg", ".css", ".js"]):
-                    new_links.append(clean_url)
-
-        # 1. Structured Data (JSON-LD)
-        json_ld_scripts = soup.find_all("script", type=lambda t: t and "ld+json" in t.lower())
-        schema_types = []
-        has_schema = False
-        same_as_links = []
-
-        for script in json_ld_scripts:
+        for tag in soup.find_all('script', type='application/ld+json'):
             try:
-                data = json.loads(script.string or "{}")
-                items = data if isinstance(data, list) else [data]
-                for item in items:
-                    t = item.get("@type")
-                    if t:
-                        has_schema = True
-                        if isinstance(t, list):
-                            schema_types.extend(t)
-                        else:
-                            schema_types.append(t)
-                    # Extract sameAs corroboration links
-                    same_as = item.get("sameAs", [])
-                    if isinstance(same_as, str):
-                        same_as = [same_as]
-                    same_as_links.extend(same_as)
-            except Exception:
+                blob = json.loads(tag.string) if tag.string else None
+                if not blob:
+                    continue
+                items = blob if isinstance(blob, list) else [blob]
+                schemas.extend(items)
+            except (json.JSONDecodeError, TypeError):
                 continue
 
-        # 2. Text & Content Depth
-        for invisible in soup(["script", "style", "noscript", "svg"]):
-            invisible.extract()
-        plain_text = soup.get_text(separator=" ", strip=True)
-        raw_html_len = len(res.text)
-        text_len = len(plain_text)
-        text_ratio = round(text_len / max(raw_html_len, 1), 3)
+        for item in schemas:
+            if not isinstance(item, dict):
+                continue
+            t = item.get('@type')
+            if t:
+                types_found.extend(t if isinstance(t, list) else [t])
+            sa = item.get('sameAs', [])
+            sameas_links.extend(sa if isinstance(sa, list) else [sa])
+            # Appendix E: audience / persona signals
+            item_lower = str(item).lower()
+            if any(kw in item_lower for kw in ('audience', 'targetaudience', 'knowsabout')):
+                has_audience = True
 
-        # 3. JS-Render / Client Skeleton Check
-        # If text is extremely short (< 250 chars) but has script tags, likely a SPA shell
-        is_js_skeleton = False
-        if text_len < 250 and ("id=\"root\"" in res.text or "id=\"app\"" in res.text or "id=\"__next\"" in res.text):
-            is_js_skeleton = True
+        got_schema = len(schemas) > 0
 
-        # 4. Non-Text Locked Content (Images lacking alt)
-        images = soup.find_all("img")
-        total_imgs = len(images)
-        missing_alt = 0
-        for img in images:
-            alt = img.get("alt")
-            if not alt or len(alt.strip()) < 3:
-                missing_alt += 1
+        # -- visible text extraction --
+        for junk in soup(['script', 'style', 'noscript', 'svg']):
+            junk.extract()
+        text = soup.get_text(separator=' ', strip=True)
+        text_len = len(text)
+        text_ratio = round(text_len / max(raw_len, 1), 4)
 
-        # 4b. Facts Locked in Canvas / PDF-Only Content (non-text render traps)
-        canvas_count = len(soup.find_all("canvas"))
-        is_canvas_heavy = canvas_count > 0 and text_len < 300
+        # -- JS rendering gap detection (Appendix C) --
+        # We use multiple independent signals here because no single one is
+        # reliable on its own. A page might have an empty #root AND a hydration
+        # blob AND a noscript warning, or just one of them.
+        empty_roots = []
+        for sel in SPA_ROOT_SELECTORS:
+            el = soup.select_one(sel)
+            if el and len(el.get_text(strip=True)) < 50:
+                empty_roots.append(sel)
+
+        has_hydration = bool(
+            soup.find('script', id='__NEXT_DATA__')
+            or re.search(r'window\.__INITIAL_STATE__\s*=', resp.text)
+            or re.search(r'window\.__NUXT__\s*=', resp.text)
+            or re.search(r'window\.__PRELOADED_STATE__\s*=', resp.text)
+        )
+
+        noscript_warn = any(
+            re.search(r'(?:enable\s+javascript|javascript\s+is\s+disabled|requires\s+javascript)',
+                       ns.get_text(), re.I)
+            for ns in soup.find_all('noscript')
+        )
+
+        n_scripts = len(soup.find_all('script', src=True))
+
+        # combine signals to decide if this is a JS skeleton
+        is_skeleton = False
+        skeleton_why = ''
+        if text_len < 250 and (empty_roots or has_hydration or noscript_warn):
+            is_skeleton = True
+            skeleton_why = f'thin text ({text_len}ch) + empty container {empty_roots[:1]}'
+        elif raw_len > 8000 and text_ratio < 0.035 and (n_scripts >= 3 or has_hydration):
+            is_skeleton = True
+            skeleton_why = (f'markup bloat (raw={raw_len}b, text={text_len}ch, '
+                            f'ratio={text_ratio*100:.1f}%)')
+        elif text_len < 150 and n_scripts > 3:
+            is_skeleton = True
+            skeleton_why = f'barely any text ({text_len}ch) drowned by {n_scripts} script bundles'
+
+        # -- images & alt text --
+        imgs = soup.find_all('img')
+        n_imgs = len(imgs)
+        n_missing_alt = sum(1 for img in imgs
+                            if not img.get('alt') or len(img.get('alt', '').strip()) < 3)
+
+        # canvas & PDF-only traps
+        n_canvas = len(soup.find_all('canvas'))
+        canvas_heavy = n_canvas > 0 and text_len < 300
         pdf_links = []
-        for a in soup.find_all("a", href=True):
-            href = a["href"].strip().lower()
-            if href.endswith(".pdf"):
-                link_text = a.get_text(strip=True)
-                pdf_links.append(link_text or href)
-        # A page whose only substantive content pointer is a PDF (very little
-        # surrounding readable text) traps facts in a format most AI crawlers
-        # either skip or extract poorly.
-        pdf_only_risk = bool(pdf_links) and text_len < 400
+        for a in soup.find_all('a', href=True):
+            if a['href'].strip().lower().endswith('.pdf'):
+                pdf_links.append(a.get_text(strip=True) or a['href'])
+        pdf_only = bool(pdf_links) and text_len < 400
 
-        # 5. Headings & Hierarchy
-        h1_count = len(soup.find_all("h1"))
-        h2_count = len(soup.find_all("h2"))
-        h3_count = len(soup.find_all("h3"))
+        # -- headings --
+        n_h1 = len(soup.find_all('h1'))
 
-        # 6. Metadata
-        title = soup.title.string.strip() if (soup.title and soup.title.string) else ""
-        meta_desc = ""
-        meta_desc_tag = soup.find("meta", attrs={"name": re.compile(r"^description$", re.I)})
-        if meta_desc_tag:
-            meta_desc = meta_desc_tag.get("content", "").strip()
+        # -- metadata --
+        title_tag = soup.title
+        title = title_tag.string.strip() if (title_tag and title_tag.string) else ''
+        meta_d = soup.find('meta', attrs={'name': re.compile(r'^description$', re.I)})
+        meta_desc = meta_d.get('content', '').strip() if meta_d else ''
 
-        # Canonical tag
-        canonical = ""
-        canon_tag = soup.find("link", rel=re.compile(r"^canonical$", re.I))
-        if canon_tag:
-            canonical = canon_tag.get("href", "").strip()
+        # canonical
+        canon = soup.find('link', rel=re.compile(r'^canonical$', re.I))
+        canonical = canon.get('href', '').strip() if canon else ''
 
-        # Viewport tag
-        viewport = bool(soup.find("meta", attrs={"name": re.compile(r"^viewport$", re.I)}))
+        # viewport
+        has_vp = bool(soup.find('meta', attrs={'name': re.compile(r'^viewport$', re.I)}))
 
-        # Freshness: Last-Modified header or copyright year
-        last_modified_header = res.headers.get("last-modified", "")
-        copyright_years = re.findall(r"(?:©|copyright|\(c\))\s*(?:20\d\d\s*-\s*)?(20\d\d)", plain_text, re.I)
-        latest_copyright = int(max(copyright_years)) if copyright_years else None
+        # -- freshness signals --
+        last_mod = resp.headers.get('last-modified', '')
+        cr_years = re.findall(
+            r'(?:©|copyright|\(c\))\s*(?:20\d\d\s*-\s*)?(20\d\d)', text, re.I
+        )
+        latest_cr = int(max(cr_years)) if cr_years else None
+
+        # also look for dateModified in structured data
+        date_mod_schema = None
+        for item in schemas:
+            if isinstance(item, dict):
+                dm = item.get('dateModified') or item.get('datePublished')
+                if dm and isinstance(dm, str):
+                    date_mod_schema = dm
+                    break
+
+        # -- OpenGraph / Twitter Cards (Appendix E) --
+        def _og(prop, fallback_name=None):
+            tag = soup.find('meta', property=prop)
+            if not tag and fallback_name:
+                tag = soup.find('meta', attrs={'name': fallback_name})
+            return tag.get('content', '').strip() if tag else ''
+
+        og_title = _og('og:title', 'twitter:title')
+        og_desc = _og('og:description', 'twitter:description')
+        og_img = _og('og:image', 'twitter:image')
+        complete_og = bool(og_title and og_desc and og_img)
+
+        # -- hreflang (Appendix E) --
+        hreflang_tags = soup.find_all('link', rel='alternate', hreflang=True)
+
+        # -- claim provenance markup --
+        has_provenance = any(
+            any(t in ('Claim', 'ClaimReview', 'CreativeWork') for t in types_found)
+            and any(k in str(item).lower()
+                    for k in ('citation', 'isbasedon', 'claiminterpreter'))
+            for item in schemas
+        )
+
+        # -- collect internal links for BFS --
+        int_links = []
+        for a in soup.find_all('a', href=True):
+            href = a['href'].split('#')[0].strip()
+            if not href or href.startswith(('mailto:', 'tel:', 'javascript:')):
+                continue
+            full = urllib.parse.urljoin(url, href)
+            purl = urllib.parse.urlparse(full)
+            if purl.netloc.lower() == self.netloc:
+                clean = f'{purl.scheme}://{purl.netloc}{purl.path}'
+                if purl.query:
+                    clean += f'?{purl.query}'
+                if clean not in int_links:
+                    int_links.append(clean)
 
         record = {
-            "url": url,
-            "status_code": res.status_code,
-            "title": title,
-            "meta_description": meta_desc,
-            "has_canonical": bool(canonical),
-            "canonical_url": canonical,
-            "has_viewport": viewport,
-            "has_schema": has_schema,
-            "schema_types": schema_types,
-            "same_as_links": same_as_links,
-            "text_length": text_len,
-            "raw_html_length": raw_html_len,
-            "text_ratio": text_ratio,
-            "is_js_skeleton": is_js_skeleton,
-            "total_images": total_imgs,
-            "missing_alt_images": missing_alt,
-            "canvas_count": canvas_count,
-            "is_canvas_heavy": is_canvas_heavy,
-            "pdf_links": pdf_links,
-            "pdf_only_risk": pdf_only_risk,
-            "h1_count": h1_count,
-            "h2_count": h2_count,
-            "h3_count": h3_count,
-            "last_modified": last_modified_header,
-            "copyright_year": latest_copyright
+            'url': url,
+            'title': title,
+            'meta_desc': meta_desc,
+            'has_canonical': bool(canonical),
+            'has_viewport': has_vp,
+            'has_schema': got_schema,
+            'schema_types': types_found,
+            'sameas_links': sameas_links,
+            'has_audience_schema': has_audience,
+            'has_claim_provenance': has_provenance,
+            'text_len': text_len,
+            'raw_html_len': raw_len,
+            'text_ratio': text_ratio,
+            'is_skeleton': is_skeleton,
+            'skeleton_why': skeleton_why,
+            'has_hydration': has_hydration,
+            'noscript_warn': noscript_warn,
+            'n_imgs': n_imgs,
+            'n_missing_alt': n_missing_alt,
+            'n_canvas': n_canvas,
+            'canvas_heavy': canvas_heavy,
+            'pdf_links': pdf_links,
+            'pdf_only': pdf_only,
+            'n_h1': n_h1,
+            'last_modified': last_mod,
+            'copyright_yr': latest_cr,
+            'date_modified_schema': date_mod_schema,
+            'complete_og': complete_og,
+            'has_hreflang': len(hreflang_tags) > 0,
         }
+        return record, int_links
 
-        return record, new_links
+    # ── wikipedia entity lookup ────────────────────────────────────
 
-    def _analyze_with_pandas(self) -> Dict[str, Any]:
-        """Converts crawled metrics into a Pandas DataFrame to compute empirical evidence."""
-        if not self.pages_data:
+    def _check_entity(self) -> dict:
+        """Hit the Wikipedia search API to see if the brand name is ambiguous."""
+        result = {
+            'term': self.brand,
+            'has_disambiguation': False,
+            'titles': [],
+            'n_matches': 0,
+        }
+        if not self.brand or len(self.brand) < 3:
+            return result
+
+        try:
+            r = requests.get(
+                'https://en.wikipedia.org/w/api.php',
+                params={
+                    'action': 'query', 'list': 'search',
+                    'srsearch': self.brand, 'srlimit': 5, 'format': 'json',
+                },
+                timeout=4,
+                headers={'User-Agent': UA_STRING},
+            )
+            if r.status_code != 200:
+                return result
+            hits = r.json().get('query', {}).get('search', [])
+            result['n_matches'] = len(hits)
+            for h in hits:
+                result['titles'].append(h.get('title', ''))
+                snip = h.get('snippet', '').lower()
+                if 'disambiguation' in h.get('title', '').lower() or 'may refer to' in snip:
+                    result['has_disambiguation'] = True
+        except Exception:
+            pass
+        return result
+
+    # ── analysis: turn raw page data into findings ─────────────────
+
+    def _build_findings(self, entity_info: dict) -> dict:
+        """
+        Crunch all the page-level data through pandas and emit
+        prioritised findings with copy-pasteable fix snippets.
+        """
+        if not self.page_records:
             return {
-                "site": self.netloc,
-                "audited_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "summary": {"total_findings": 1, "critical": 1, "high": 0, "medium": 0, "low": 0},
-                "findings": [{
-                    "id": "F-001",
-                    "title": "Site Inaccessible or Refused Connection",
-                    "severity": "critical",
-                    "evidence": f"Failed to crawl any valid HTML pages from {self.base_url}.",
-                    "suggested_action": {
-                        "summary": "Verify domain DNS records, SSL certificates, and server availability.",
-                        "priority": "high"
-                    }
-                }]
+                'site': self.netloc,
+                'audited_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                'summary': {'total_findings': 1, 'critical': 1, 'high': 0, 'medium': 0, 'low': 0},
+                'findings': [{
+                    'id': 'F-001',
+                    'title': 'Site Unreachable — No Pages Crawled',
+                    'severity': 'critical',
+                    'evidence': f'Could not fetch any HTML from {self.base_url}.',
+                    'suggested_action': {
+                        'summary': 'Check DNS, SSL certs, and server availability.',
+                        'priority': 'high',
+                    },
+                }],
             }
 
-        df = pd.DataFrame(self.pages_data)
-        total_pages = len(df)
+        df = pd.DataFrame(self.page_records)
+        n = len(df)
         findings = []
-        finding_idx = 1
+        idx = [1]  # mutable counter so helpers can bump it
 
-        # -------------------------------------------------------------
-        # 1. Robots.txt Disallow Directives for AI Bots (Critical/High)
-        # -------------------------------------------------------------
-        blocked_ai = self.robots_rules.get("blocked_ai_bots", [])
-        if blocked_ai:
+        def _add(title, severity, evidence, fix, priority=None):
             findings.append({
-                "id": f"F-{finding_idx:03d}",
-                "title": "AI Assistant Crawlers Blocked in robots.txt",
-                "severity": "critical",
-                "evidence": f"robots.txt disallows access to top AI retrieval crawlers: {', '.join(blocked_ai)}. This directly prevents ChatGPT, Claude, and Perplexity from indexing or citing brand facts.",
-                "suggested_action": {
-                    "summary": f"Update robots.txt to explicitly allow GPTBot, ClaudeBot, and PerplexityBot on public marketing and documentation paths.",
-                    "priority": "high"
-                }
+                'id': f'F-{idx[0]:03d}',
+                'title': title,
+                'severity': severity,
+                'evidence': evidence,
+                'suggested_action': {
+                    'summary': fix,
+                    'priority': priority or severity,
+                },
             })
-            finding_idx += 1
+            idx[0] += 1
 
-        # -------------------------------------------------------------
-        # 2. Missing Schema.org Structured Data (High)
-        # -------------------------------------------------------------
-        pages_with_schema = int(df["has_schema"].sum())
-        schema_coverage_pct = round((pages_with_schema / total_pages) * 100, 1)
-        if schema_coverage_pct < 50.0:
-            findings.append({
-                "id": f"F-{finding_idx:03d}",
-                "title": "Deficient Schema.org JSON-LD Structured Data",
-                "severity": "high",
-                "evidence": f"Crawled {total_pages} pages; only {pages_with_schema}/{total_pages} ({schema_coverage_pct}%) contain JSON-LD structured data. Key entities (Organization, Product, WebSite) are missing.",
-                "suggested_action": {
-                    "summary": "Inject Schema.org JSON-LD markup on every page with Organization, Product, and WebSite schemas to allow LLMs to unambiguously extract core brand facts.",
-                    "priority": "high"
-                }
-            })
-            finding_idx += 1
+        # 1) AI bots blocked in robots.txt  [critical]
+        blocked = self.robots_info.get('blocked_bots', [])
+        if blocked:
+            bots_str = ', '.join(blocked)
+            directives = '\n'.join([
+                '# Allow AI retrieval crawlers on public paths',
+                'User-agent: GPTBot\nAllow: /',
+                'User-agent: ClaudeBot\nAllow: /',
+                'User-agent: PerplexityBot\nAllow: /',
+                'User-agent: Google-Extended\nAllow: /',
+                'User-agent: Applebot-Extended\nAllow: /',
+            ])
+            _add(
+                'AI Crawlers Blocked in robots.txt',
+                'critical',
+                (f'robots.txt blocks these AI retrieval bots: {bots_str}. '
+                 'ChatGPT, Claude, and Perplexity literally cannot index the site.'),
+                f'Add explicit Allow rules for each AI crawler:\n\n{directives}',
+            )
 
-        # -------------------------------------------------------------
-        # 3. Client-Side Rendering Gaps (JS Skeletons) (High)
-        # -------------------------------------------------------------
-        js_skeletons = df[df["is_js_skeleton"] == True]
-        if len(js_skeletons) > 0:
-            skeleton_urls = js_skeletons["url"].head(3).tolist()
-            findings.append({
-                "id": f"F-{finding_idx:03d}",
-                "title": "Client-Side Rendered Skeleton Pages (Content Ingestion Gap)",
-                "severity": "high",
-                "evidence": f"{len(js_skeletons)}/{total_pages} pages return empty HTML shells (< 250 characters of readable text) dependent on client-side JS rendering. Examples: {', '.join(skeleton_urls)}.",
-                "suggested_action": {
-                    "summary": "Implement Server-Side Rendering (SSR) or dynamic pre-rendering (Static Site Generation / Edge caching) for AI crawler User-Agents.",
-                    "priority": "high"
-                }
-            })
-            finding_idx += 1
+        # 2) low Schema.org JSON-LD coverage  [high]
+        with_schema = int(df['has_schema'].sum())
+        schema_pct = round(with_schema / n * 100, 1)
+        if schema_pct < 50:
+            snippet = (
+                '<script type="application/ld+json">\n'
+                '{\n'
+                '  "@context": "https://schema.org",\n'
+                '  "@type": "Organization",\n'
+                f'  "name": "{self.brand}",\n'
+                f'  "url": "{self.base_url}",\n'
+                f'  "logo": "{self.base_url}/logo.png",\n'
+                '  "sameAs": [\n'
+                '    "https://www.wikidata.org/wiki/Q...",\n'
+                f'    "https://www.linkedin.com/company/{self.brand.lower()}"\n'
+                '  ]\n'
+                '}\n'
+                '</script>'
+            )
+            _add(
+                'Low Schema.org JSON-LD Coverage',
+                'high',
+                (f'{with_schema}/{n} pages ({schema_pct}%) have JSON-LD. '
+                 'Missing Organization, Product, and WebSite types means AI '
+                 'assistants can\'t reliably extract structured brand facts.'),
+                f'Add JSON-LD to every page template:\n\n{snippet}',
+            )
 
-        # -------------------------------------------------------------
-        # 4. Facts Locked in Non-Text (Images Missing Alt Text) (Medium)
-        # -------------------------------------------------------------
-        total_images = int(df["total_images"].sum())
-        missing_alt = int(df["missing_alt_images"].sum())
-        if total_images > 0 and (missing_alt / total_images) > 0.35:
-            missing_pct = round((missing_alt / total_images) * 100, 1)
-            findings.append({
-                "id": f"F-{finding_idx:03d}",
-                "title": "Key Information Locked in Non-Text Media (Missing Alt Text)",
-                "severity": "medium",
-                "evidence": f"Analyzed {total_images} images across crawled pages; {missing_alt} ({missing_pct}%) lack descriptive alt attributes, making product diagrams and brand badges unreadable to AI summarizers.",
-                "suggested_action": {
-                    "summary": "Audit image assets and provide concise, descriptive 'alt' text that captures facts, metrics, and functional descriptions for screen-readers and AI parsers.",
-                    "priority": "medium"
-                }
-            })
-            finding_idx += 1
-
-        # -------------------------------------------------------------
-        # 4c. Facts Locked in Canvas or PDF-Only Content (Medium)
-        # -------------------------------------------------------------
-        canvas_heavy_pages = df[df["is_canvas_heavy"] == True]
-        pdf_risk_pages = df[df["pdf_only_risk"] == True]
-        if len(canvas_heavy_pages) > 0 or len(pdf_risk_pages) > 0:
-            examples = []
-            if len(canvas_heavy_pages) > 0:
-                examples.append(f"{len(canvas_heavy_pages)} page(s) render key content inside <canvas> with under 300 chars of surrounding text")
-            if len(pdf_risk_pages) > 0:
-                examples.append(f"{len(pdf_risk_pages)} page(s) point to PDF documents as the primary content with under 400 chars of on-page text")
-            findings.append({
-                "id": f"F-{finding_idx:03d}",
-                "title": "Facts Locked in Canvas or PDF-Only Content",
-                "severity": "medium",
-                "evidence": "; ".join(examples) + ". Canvas-rendered graphics and PDF-only documents are frequently skipped or poorly parsed by AI retrieval crawlers, unlike plain HTML text.",
-                "suggested_action": {
-                    "summary": "Mirror the key facts from canvas graphics and linked PDFs as plain, readable HTML text on the same page (e.g. a text summary or transcript block), reserving canvas/PDF for the visual presentation only.",
-                    "priority": "medium"
-                }
-            })
-            finding_idx += 1
-
-        # -------------------------------------------------------------
-        # 5. Entity Ambiguity & Lack of Cross-Web Corroboration (High)
-        # -------------------------------------------------------------
-        all_same_as = [link for sublist in df["same_as_links"] for link in sublist]
-        has_authoritative_same_as = any(
-            any(auth in link.lower() for auth in AUTHORITATIVE_ENTITY_DOMAINS)
-            for link in all_same_as
+        # 3) missing sameAs + entity ambiguity  [high]
+        all_sa = [lnk for row_links in df['sameas_links'] for lnk in row_links]
+        has_good_sameas = any(
+            any(d in lnk.lower() for d in KNOWN_ENTITY_DOMAINS)
+            for lnk in all_sa
         )
-        if not has_authoritative_same_as:
-            findings.append({
-                "id": f"F-{finding_idx:03d}",
-                "title": "Entity Ambiguity & Missing Cross-Web Knowledge Graph Links",
-                "severity": "high",
-                "evidence": f"Zero pages declare 'sameAs' entity links in JSON-LD pointing to authoritative external knowledge graphs (e.g., Wikidata, Wikipedia, Crunchbase, LinkedIn). This leaves the brand vulnerable to mistaken identity in LLMs.",
-                "suggested_action": {
-                    "summary": "Add 'sameAs' URIs pointing to official Wikidata, Crunchbase, and LinkedIn profiles in the root Organization schema to establish unambiguous machine identity.",
-                    "priority": "high"
-                }
-            })
-            finding_idx += 1
+        if not has_good_sameas:
+            bits = [
+                'No pages link to authoritative knowledge graphs (Wikidata, '
+                'Wikipedia, Crunchbase, LinkedIn) via sameAs in JSON-LD.'
+            ]
+            if entity_info.get('has_disambiguation') or entity_info.get('n_matches', 0) > 1:
+                matched = ', '.join(f"'{t}'" for t in entity_info.get('titles', []))
+                bits.append(
+                    f"Wikipedia search for '{entity_info['term']}' returned "
+                    f"multiple entities ({matched}) — high naming-collision risk."
+                )
+            else:
+                bits.append(
+                    'Without external entity anchors, LLMs risk hallucinating '
+                    'or conflating the brand with something else entirely.'
+                )
+            _add(
+                'Missing Knowledge-Graph Entity Links (sameAs)',
+                'high',
+                ' '.join(bits),
+                (
+                    'Add sameAs URIs to the homepage Organization schema:\n\n'
+                    '"sameAs": [\n'
+                    '  "https://www.wikidata.org/wiki/Q<ENTITY_ID>",\n'
+                    f'  "https://en.wikipedia.org/wiki/{self.brand}",\n'
+                    f'  "https://www.linkedin.com/company/{self.brand.lower()}",\n'
+                    f'  "https://www.crunchbase.com/organization/{self.brand.lower()}"\n'
+                    ']\n\n'
+                    f'Also add: "disambiguatingDescription": '
+                    f'"{self.brand} is a ... (fill in what makes it unique)"'
+                ),
+            )
 
-        # -------------------------------------------------------------
-        # 6. Absence of Emerging AI Ingestion Standard: llms.txt (Proactive / Medium)
-        # -------------------------------------------------------------
-        if not self.llms_txt_found:
-            findings.append({
-                "id": f"F-{finding_idx:03d}",
-                "title": "Missing llms.txt Standard for Context Window Ingestion",
-                "severity": "medium",
-                "evidence": f"Neither /llms.txt nor /.well-known/llms.txt was detected on {self.netloc}. Modern LLM agents seek this standard for concise, high-signal brand context.",
-                "suggested_action": {
-                    "summary": "Publish a curated /llms.txt markdown document containing core brand architecture, key offerings, and canonical documentation links formatted for LLM context windows.",
-                    "priority": "medium"
-                }
-            })
-            finding_idx += 1
+        # 4) JS skeleton / SPA rendering gap  [high]
+        skeletons = df[df['is_skeleton'] == True]
+        if len(skeletons) > 0:
+            example_urls = skeletons['url'].head(3).tolist()
+            reasons = [r for r in skeletons['skeleton_why'].unique() if r]
+            detail = f' Signals: {"; ".join(reasons[:2])}.' if reasons else ''
+            _add(
+                'Client-Side Rendered Pages (AI Ingestion Gap)',
+                'high',
+                (f'{len(skeletons)}/{n} pages are JS-only shells that return '
+                 f'near-empty HTML to non-headless crawlers like GPTBot and '
+                 f'ClaudeBot.{detail} Examples: {", ".join(example_urls)}.'),
+                (
+                    'Use SSR or set up bot-specific prerendering. '
+                    'Nginx example:\n\n'
+                    'if ($http_user_agent ~* "GPTBot|ChatGPT-User|ClaudeBot|'
+                    'PerplexityBot|Applebot-Extended") {\n'
+                    '    proxy_pass http://prerender-service:3000/render/'
+                    '$scheme://$host$request_uri;\n'
+                    '    break;\n'
+                    '}'
+                ),
+            )
 
-        # -------------------------------------------------------------
-        # 7. Freshness & Content Staleness Signals (Low)
-        # -------------------------------------------------------------
-        current_year = datetime.now().year
-        stale_copyright_pages = df[df["copyright_year"].apply(lambda y: y is not None and y < current_year - 1)]
-        if len(stale_copyright_pages) > 0:
-            findings.append({
-                "id": f"F-{finding_idx:03d}",
-                "title": "Stale Copyright and Content Freshness Indicators",
-                "severity": "low",
-                "evidence": f"{len(stale_copyright_pages)}/{total_pages} pages display outdated copyright years (< {current_year - 1}), signalling abandoned content to temporal AI ranking heuristics.",
-                "suggested_action": {
-                    "summary": "Automate copyright year updates in global footer templates and expose HTTP 'Last-Modified' headers or 'dateModified' schema fields.",
-                    "priority": "low"
-                }
-            })
-            finding_idx += 1
+        # 5) images missing alt text  [medium]
+        total_imgs = int(df['n_imgs'].sum())
+        missing_alt = int(df['n_missing_alt'].sum())
+        if total_imgs > 0 and missing_alt / total_imgs > 0.35:
+            pct = round(missing_alt / total_imgs * 100, 1)
+            _add(
+                'Images Missing Descriptive Alt Text',
+                'medium',
+                f'{missing_alt}/{total_imgs} ({pct}%) images lack meaningful alt '
+                f'attributes — AI summarisers treat them as invisible.',
+                (
+                    'Write descriptive alt for every informational image:\n\n'
+                    '<figure>\n'
+                    '  <img src="arch.png" alt="Architecture: stream ingestion '
+                    '→ processing → storage cluster" />\n'
+                    '  <figcaption>System Architecture</figcaption>\n'
+                    '</figure>'
+                ),
+            )
 
-        # -------------------------------------------------------------
-        # 8. Proactive "Beyond-Defect" Recommendation: FAQPage Microdata
-        # -------------------------------------------------------------
-        has_faq_schema = any("FAQPage" in types for types in df["schema_types"])
-        if not has_faq_schema:
-            findings.append({
-                "id": f"F-{finding_idx:03d}",
-                "title": "Proactive Opportunity: Add FAQPage Schema for Conversational AI",
-                "severity": "medium",
-                "evidence": "No pages utilize Schema.org FAQPage structured markup. AI search engines (Perplexity, Google AI Overviews) heavily prioritize direct Question-and-Answer pairs.",
-                "suggested_action": {
-                    "summary": "Implement FAQPage JSON-LD on product and pricing pages, defining common user queries and canonical concise answers to dominate direct conversational citations.",
-                    "priority": "medium"
-                }
-            })
-            finding_idx += 1
+        # 5b) canvas / PDF-only traps  [medium]
+        canvas_pages = df[df['canvas_heavy'] == True]
+        pdf_pages = df[df['pdf_only'] == True]
+        if len(canvas_pages) > 0 or len(pdf_pages) > 0:
+            parts = []
+            if len(canvas_pages):
+                parts.append(f'{len(canvas_pages)} page(s) render content in '
+                             '<canvas> with barely any surrounding text')
+            if len(pdf_pages):
+                parts.append(f'{len(pdf_pages)} page(s) rely on PDF links '
+                             'as primary content with <400 chars of HTML text')
+            _add(
+                'Content Trapped in Canvas / PDF-Only Pages',
+                'medium',
+                '; '.join(parts) + '. AI crawlers skip or poorly parse these formats.',
+                (
+                    'Mirror key facts as semantic HTML next to the visual:\n\n'
+                    '<div class="canvas-text-fallback">\n'
+                    '  <h3>Chart Summary</h3>\n'
+                    '  <p>Q3 throughput increased 34% over baseline...</p>\n'
+                    '</div>'
+                ),
+            )
 
-        # Calculate counts
-        counts = {
-            "total_findings": len(findings),
-            "critical": sum(1 for f in findings if f["severity"] == "critical"),
-            "high": sum(1 for f in findings if f["severity"] == "high"),
-            "medium": sum(1 for f in findings if f["severity"] == "medium"),
-            "low": sum(1 for f in findings if f["severity"] == "low")
-        }
+        # 6) incomplete OpenGraph / Twitter Cards  [medium] — Appendix E
+        og_count = int(df['complete_og'].sum())
+        og_pct = round(og_count / n * 100, 1)
+        if og_pct < 50:
+            _add(
+                'Incomplete OpenGraph Metadata Limits AI Personalisation',
+                'medium',
+                (f'Only {og_count}/{n} ({og_pct}%) pages have full OG tags '
+                 '(title+desc+image). AI assistants use these to tailor how '
+                 'they present the brand in conversational answers (Appendix E).'),
+                (
+                    'Add OG + Twitter Card tags to every page <head>:\n\n'
+                    f'<meta property="og:title" content="{self.brand} — '
+                    f'Platform Overview" />\n'
+                    '<meta property="og:description" content="High-performance '
+                    'data streaming for enterprise scale." />\n'
+                    f'<meta property="og:image" content="{self.base_url}'
+                    '/assets/preview.jpg" />\n'
+                    '<meta property="og:type" content="website" />\n'
+                    f'<meta property="og:url" content="{self.base_url}" />\n'
+                    '<meta name="twitter:card" content="summary_large_image" />'
+                ),
+            )
+
+        # 7) no Schema.org audience / persona  [medium] — Appendix E
+        if int(df['has_audience_schema'].sum()) == 0:
+            _add(
+                'No Schema.org Audience Signals for Persona Matching',
+                'medium',
+                ('Zero pages declare audience or targetAudience in JSON-LD. '
+                 'AI assistants use these to decide which brand to surface '
+                 'for a given user profile (Appendix E).'),
+                (
+                    'Declare target audience in structured data:\n\n'
+                    '<script type="application/ld+json">\n'
+                    '{\n'
+                    '  "@context": "https://schema.org",\n'
+                    '  "@type": "SoftwareApplication",\n'
+                    f'  "name": "{self.brand}",\n'
+                    '  "audience": {\n'
+                    '    "@type": "BusinessAudience",\n'
+                    '    "audienceType": "Enterprise Engineering Teams"\n'
+                    '  },\n'
+                    '  "knowsAbout": ["Real-Time Analytics", '
+                    '"Stream Processing", "Distributed Systems"]\n'
+                    '}\n'
+                    '</script>'
+                ),
+            )
+
+        # 8) missing llms.txt  [medium]
+        if not self.has_llms_txt:
+            _add(
+                'No llms.txt for LLM Context-Window Ingestion',
+                'medium',
+                f'Neither /llms.txt nor /.well-known/llms.txt exists on '
+                f'{self.netloc}. LLM agents look for this standard when '
+                f'building brand context.',
+                (
+                    f'Create {self.base_url}/llms.txt:\n\n'
+                    f'# {self.brand}\n'
+                    '> One-sentence value prop.\n\n'
+                    '## Core Docs\n'
+                    f'- [Getting Started]({self.base_url}/docs): Setup guide.\n'
+                    f'- [API Ref]({self.base_url}/api): REST & GraphQL.\n\n'
+                    '## Entity\n'
+                    '- Wikidata: https://www.wikidata.org/wiki/Q...'
+                ),
+            )
+
+        # 9) entity name collision warning  [medium]
+        ei = entity_info
+        if ei.get('has_disambiguation') or ei.get('n_matches', 0) > 2:
+            titles_str = ', '.join(f"'{t}'" for t in ei.get('titles', []))
+            _add(
+                'Brand-Name Collision in External Knowledge Bases',
+                'medium',
+                (f"Wikipedia search for '{ei['term']}' returned "
+                 f"{ei['n_matches']} entities: {titles_str}. "
+                 f"{'Disambiguation page exists — ' if ei.get('has_disambiguation') else ''}"
+                 f"LLMs may confuse this brand with unrelated entities."),
+                (f"Use the full qualified name everywhere (e.g. "
+                 f"'{self.brand} (software company)' not just '{self.brand}'). "
+                 f"Add disambiguatingDescription and official Wikidata URIs."),
+            )
+
+        # 10) stale copyright / freshness  [low]
+        this_year = datetime.now().year
+        stale = df[df['copyright_yr'].apply(lambda y: y is not None and y < this_year - 1)]
+        if len(stale) > 0:
+            _add(
+                'Stale Copyright / Freshness Signals',
+                'low',
+                (f'{len(stale)}/{n} pages show copyright years older than '
+                 f'{this_year - 1}, signalling abandoned content to '
+                 f'temporal AI ranking heuristics.'),
+                (
+                    f'Auto-update copyright in footer templates:\n\n'
+                    f'<footer>&copy; {this_year} {self.brand}. All rights reserved.</footer>\n'
+                    f'<meta property="article:modified_time" '
+                    f'content="{datetime.now().strftime("%Y-%m-%d")}" />'
+                ),
+            )
+
+        # 11) no XML sitemap  [low]
+        if not self.sitemap_urls:
+            _add(
+                'No XML Sitemap Declared or Found at /sitemap.xml',
+                'low',
+                ('Neither robots.txt nor /sitemap.xml provides a sitemap. '
+                 'AI crawlers must rely on link-following alone, likely '
+                 'missing deep pages.'),
+                (
+                    f'Publish a sitemap and declare it:\n\n'
+                    f'Sitemap: {self.base_url}/sitemap.xml\n\n'
+                    '<url>\n'
+                    f'  <loc>{self.base_url}/docs/quickstart</loc>\n'
+                    f'  <lastmod>{datetime.now().strftime("%Y-%m-%d")}</lastmod>\n'
+                    '  <changefreq>weekly</changefreq>\n'
+                    '</url>'
+                ),
+            )
+
+        # 12) missing canonical tags  [low]
+        no_canon = df[df['has_canonical'] == False]
+        if len(no_canon) / n > 0.4:
+            _add(
+                'Canonical Tags Missing on Many Pages',
+                'low',
+                f'{len(no_canon)}/{n} pages lack <link rel="canonical">. '
+                f'Search engines and AI scrapers risk indexing duplicates.',
+                (
+                    'Add self-referential canonical to every page:\n\n'
+                    f'<link rel="canonical" href="{self.base_url}/your-page" />'
+                ),
+            )
+
+        # 13) no hreflang  [low] — Appendix E
+        hreflang_count = int(df['has_hreflang'].sum())
+        if hreflang_count == 0 and n >= 3:
+            _add(
+                'No hreflang Tags for Locale-Aware AI Responses',
+                'low',
+                ('Zero pages declare hreflang alternates. AI assistants use '
+                 'locale signals to serve geographically relevant content '
+                 '(Appendix E).'),
+                (
+                    'Add hreflang for each supported locale:\n\n'
+                    f'<link rel="alternate" hreflang="en-US" '
+                    f'href="{self.base_url}/en/" />\n'
+                    f'<link rel="alternate" hreflang="de-DE" '
+                    f'href="{self.base_url}/de/" />\n'
+                    f'<link rel="alternate" hreflang="x-default" '
+                    f'href="{self.base_url}/" />'
+                ),
+            )
+
+        # 14) proactive: FAQPage schema  [medium]
+        has_faq = any('FAQPage' in ts for ts in df['schema_types'])
+        if not has_faq:
+            _add(
+                'Opportunity: FAQPage Schema for Conversational Citations',
+                'medium',
+                ('No FAQPage JSON-LD found. Perplexity and Google AI Overviews '
+                 'heavily prioritise Q&A pairs for direct conversational answers.'),
+                (
+                    'Add FAQPage structured data on docs/product pages:\n\n'
+                    '<script type="application/ld+json">\n'
+                    '{\n'
+                    '  "@context": "https://schema.org",\n'
+                    '  "@type": "FAQPage",\n'
+                    '  "mainEntity": [{\n'
+                    '    "@type": "Question",\n'
+                    f'    "name": "What does {self.brand} do?",\n'
+                    '    "acceptedAnswer": {\n'
+                    '      "@type": "Answer",\n'
+                    f'      "text": "{self.brand} provides ..."\n'
+                    '    }\n'
+                    '  }]\n'
+                    '}\n'
+                    '</script>'
+                ),
+            )
+
+        # 15) proactive: claim provenance  [medium]
+        if not any(df['has_claim_provenance']):
+            _add(
+                'Opportunity: Structured Claim Provenance for Citation Confidence',
+                'medium',
+                ('No ClaimReview or citation provenance markup detected. '
+                 'AI search engines increasingly prefer sources with verifiable, '
+                 'structured evidence backing their claims.'),
+                (
+                    'Tag benchmarks and metrics with Schema.org Claim:\n\n'
+                    '<script type="application/ld+json">\n'
+                    '{\n'
+                    '  "@context": "https://schema.org",\n'
+                    '  "@type": "Claim",\n'
+                    '  "claimInterpreter": {\n'
+                    '    "@type": "Organization",\n'
+                    '    "name": "Independent Testing Lab"\n'
+                    '  },\n'
+                    f'  "text": "{self.brand} delivers 4x throughput '
+                    f'vs industry baselines.",\n'
+                    '  "appearance": {\n'
+                    '    "@type": "CreativeWork",\n'
+                    f'    "url": "{self.base_url}/benchmarks",\n'
+                    '    "citation": "https://doi.org/10.1000/182"\n'
+                    '  }\n'
+                    '}\n'
+                    '</script>'
+                ),
+            )
 
         return {
-            "site": self.netloc,
-            "audited_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "summary": counts,
-            "findings": findings
+            'site': self.netloc,
+            'audited_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'summary': _severity_counts(findings),
+            'findings': findings,
         }
 
+    # ── public entry point ─────────────────────────────────────────
+
+    def run(self) -> dict:
+        self._parse_robots()
+        self._probe_sitemap()
+        self._probe_llms_txt()
+        self._crawl()
+        entity = self._check_entity()
+        return self._build_findings(entity)
+
+
+# ── CLI ─────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Nexus Coders Brand Audit Crawler")
-    parser.add_argument("url", help="Target URL or domain to audit (e.g. https://example.com)")
-    parser.add_argument("--max-pages", type=int, default=15, help="Maximum pages to crawl (default: 15)")
-    parser.add_argument("--timeout", type=int, default=6, help="HTTP timeout in seconds (default: 6)")
-    parser.add_argument("--output", "-o", help="Optional path to write JSON output report")
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser(
+        description='Discoverability & entity corroboration auditor')
+    ap.add_argument('url', help='Target URL or domain')
+    ap.add_argument('--max-pages', type=int, default=15,
+                    help='Max pages to crawl (default 15)')
+    ap.add_argument('--timeout', type=int, default=6,
+                    help='HTTP timeout in seconds (default 6)')
+    ap.add_argument('--output', '-o', help='Write JSON report to this path')
+    args = ap.parse_args()
 
-    crawler = BrandAuditCrawler(base_url=args.url, max_pages=args.max_pages, timeout=args.timeout)
-    report = crawler.run()
+    auditor = DiscoverabilityAuditor(
+        base_url=args.url, max_pages=args.max_pages, timeout=args.timeout)
+    report = auditor.run()
 
-    output_json = json.dumps(report, indent=2)
+    out = json.dumps(report, indent=2)
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as f:
-            f.write(output_json)
-        print(f"Audit report saved to {args.output}")
+        with open(args.output, 'w', encoding='utf-8') as fh:
+            fh.write(out)
+        print(f'Report saved to {args.output}', file=sys.stderr)
     else:
-        print(output_json)
+        print(out)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
