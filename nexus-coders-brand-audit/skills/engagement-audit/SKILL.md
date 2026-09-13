@@ -1,6 +1,6 @@
 ---
 name: engagement-audit
-description: Dedicated skill for auditing a website's on-site visitor engagement, retention, and AI-summary/email-digest readiness. Deterministically measures above-the-fold value proposition clarity, deep-link navigation orientation, reading density, call-to-action friction, mobile viewport readiness, AI email-summary content readiness (Appendix F: text-vs-image ratios, preheader optimization, boilerplate displacement), and above-the-fold personalization signals (Appendix E). Use when diagnosing why visitors referred by AI assistants bounce or why content is dropped by AI email summarizers.
+description: Audits on-site visitor engagement, retention friction, and AI-summary / email-digest readiness. Evaluates above-the-fold value proposition clarity, navigation orientation, reading density, CTA friction, mobile viewport stability, and email-digest content readiness.
 version: 2.0.0
 author: Nexus Coders
 license: Apache-2.0
@@ -16,54 +16,54 @@ dependencies:
 
 # Engagement Audit (On-Site Visitor Retention & AI-Summary Readiness)
 
-The `engagement-audit` skill assesses why human visitors who arrive at a website—especially those referred by AI assistant citations—stay, understand the offer, and convert, or bounce immediately. It also evaluates whether the site's content is structured to survive AI summarization in emails, inbox digests, search snippets, and chat answers (Appendix F). It is self-contained: it performs its own polite, robots.txt-respecting crawl and does not depend on `discoverability-audit` having run first.
+The `engagement-audit` skill assesses why visitors who arrive at a website—especially those referred by AI assistant citations—stay and explore or bounce immediately. It also checks whether page content survives automated summarization in AI email digests, search snippets, and conversational answers (Appendix F). The skill is self-contained: it runs its own polite crawl and does not require `discoverability-audit` to run first.
 
 For comprehensive guidelines and templates, see:
-- [checklist.md](file:///home/iron-man/.gemini/antigravity-ide/scratch/Nexus_adobe/nexus-coders-brand-audit/skills/engagement-audit/references/checklist.md) — 8-dimension qualitative evaluation checklist for visitor retention and scannability.
-- [email-readiness-guide.md](file:///home/iron-man/.gemini/antigravity-ide/scratch/Nexus_adobe/nexus-coders-brand-audit/skills/engagement-audit/references/email-readiness-guide.md) — Email template architecture, AI inbox preheader optimization, and plain-text fallback protocols.
+- [references/checklist.md](references/checklist.md) — 8-dimension qualitative evaluation checklist for visitor retention and scannability.
+- [references/email-readiness-guide.md](references/email-readiness-guide.md) — Email template architecture, AI inbox preheader optimization, and plain-text protocols.
 
 ## When to use
 Activate this skill when:
-- Investigating high bounce rates from search engines or AI assistant referral links.
-- Evaluating whether landing pages clearly orient deep-linked visitors who bypassed the homepage.
+- Diagnosing high bounce rates from search engines or AI assistant referral links.
+- Evaluating whether landing pages orient visitors who land directly on deep links rather than the homepage.
 - Auditing heading hierarchy, scannability, and information density.
-- Identifying Call-to-Action (CTA) friction, ambiguous buttons, or dead-end pages.
-- Checking mobile viewport readiness and layout-shift risk.
-- Assessing whether content would survive AI email-digest summarization (Appendix F).
+- Spotting Call-to-Action (CTA) friction, vague buttons, or dead-end pages.
+- Checking mobile viewport tags and layout shift risks.
+- Checking whether content will survive AI email-digest summarization (Appendix F).
 - Evaluating above-the-fold content density for AI-personalized referrals (Appendix E).
 
 ## Inputs
-- **`url`** (string, required): The target website URL or domain to evaluate (e.g. `https://example.com`).
-- **`max_pages`** (integer, optional): Maximum pages to sample (default: 10, max: 30).
-- **`timeout`** (integer, optional): HTTP request timeout in seconds (default: 6).
+- `url` (string, required): Target website URL or domain (e.g., `https://example.com`).
+- `max_pages` (integer, optional): Maximum pages to sample (default: 10, max: 30).
+- `timeout` (integer, optional): HTTP request timeout in seconds (default: 6).
 
-## Procedure (Numbered, Deterministic Steps)
+## Procedure
 
-1. **Invoke the Quantitative Analyzer**:
+1. **Run the Engagement Analyzer**:
    Execute the bundled Python analyzer [engagement_analyzer.py](./scripts/engagement_analyzer.py):
    ```bash
    python3 skills/engagement-audit/scripts/engagement_analyzer.py <target-url> --max-pages 10 --output ./engagement_findings.json
    ```
 
-2. **Cross-Check Against the Detailed Checklist**:
-   For nuances the script cannot measure statically (hero visual quality, tap-target sizing, true rendered CLS), consult [references/checklist.md](./references/checklist.md) and spot-check the rendered page.
+2. **Cross-Check with the Reference Checklist**:
+   For aspects that cannot be measured statically (such as hero visual context or live tap target geometry), consult [references/checklist.md](references/checklist.md) and spot-check the page visually.
 
-3. **The 8 Engagement Dimensions Measured**:
-   - **Value Proposition Clarity**: `<h1>` count/uniqueness, benefit alignment, and 5-second test failure detection.
-   - **Orientation & Context Retention**: For non-homepage pages, presence of breadcrumb trails or persistent `<nav>`/`<header>`.
+3. **The 8 Dimensions Evaluated**:
+   - **Value Proposition Clarity**: `<h1>` count/uniqueness, benefit alignment, and 5-second test failures.
+   - **Orientation & Context Retention**: Presence of breadcrumbs or clear navigation on deep-linked landing pages.
    - **Scannability & Hierarchy**: Paragraphs exceeding ~450 characters, heading progression (`H1` -> `H2` -> `H3`), and bullet list usage.
    - **CTA Friction & Conversion Pathways**: Ambiguous button text ('Click Here', 'Learn More') and pages with zero CTA (dead ends).
-   - **Mobile Viewport & Layout Stability**: `<meta name="viewport">` and `<img>` explicit width/height attributes to eliminate CLS.
-   - **AI Email-Digest & Inbox Summarization Readiness (Appendix F)**: Image-to-text ratios (< 60:40), opening boilerplate filler displacement, and invisible inbox preheaders.
-   - **Above-the-Fold Personalization Density (Appendix E)**: Whether the first 500 characters contain substantive text answering who/what/why to match user persona and prior context.
-   - **Proactive Retention Enhancement**: Instant-value interactive widget and context-aware referrer personalization.
+   - **Mobile Viewport & Layout Stability**: `<meta name="viewport">` and image dimension attributes to minimize CLS.
+   - **AI Email-Digest & Inbox Readiness (Appendix F)**: Image-to-text ratios (< 60:40), opening boilerplate filler displacement, and invisible inbox preheaders.
+   - **Above-the-Fold Personalization Density (Appendix E)**: Whether first-visible text gives AI assistants enough substance to match user persona and prior context.
+   - **Proactive Retention Enhancements**: Instant-value interactive widgets and context-aware referrer personalization.
 
-4. **Validate Output**:
-   Confirm the emitted JSON conforms to the shared schema before the `audit-orchestrator` merges it.
+4. **Output Verification**:
+   Verify the emitted JSON report conforms to the shared schema before handing off to `audit-orchestrator`.
 
 ## Output
 Emits a structured findings JSON detailing:
-- Identified friction points with concrete quantitative evidence.
+- Identified friction points with quantitative evidence.
 - AI-summary and email-digest readiness warnings.
-- Prioritized design and UX actions with copy-pasteable HTML/CSS code snippets.
+- Prioritized design and UX recommendations with copy-pasteable HTML/CSS code snippets.
 - Proactive engagement levers (Instant-value widget, AI referrer welcome ribbon).
