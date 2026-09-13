@@ -1,7 +1,7 @@
 {
   "name": "nexus-coders-brand-audit",
-  "version": "1.1.0",
-  "description": "Multi-skill Agent Skill Marketplace for automated website brand auditing — evaluating off-site AI discoverability and on-site visitor engagement to produce prioritized, mechanism-sound fixes and proactive improvements.",
+  "version": "1.2.0",
+  "description": "Multi-skill Agent Skill Marketplace for automated website brand auditing — evaluating off-site AI discoverability, cross-web corroboration/freshness, and on-site visitor engagement to produce prioritized, mechanism-sound fixes and proactive improvements.",
   "author": "Nexus Coders",
   "license": "Apache-2.0",
   "skills": [
@@ -9,17 +9,22 @@
       "id": "audit-orchestrator",
       "path": "skills/audit-orchestrator",
       "entrypoint": true,
-      "description": "The entrypoint skill that coordinates off-site discoverability and on-site engagement audits, synthesizes proactive recommendations, and emits the final JSON audit report."
+      "description": "The designated entrypoint skill that coordinates specialized sub-skills (crawl-render-audit, freshness-corroboration, engagement-audit), synthesizes cross-skill correlations, and emits the final unified JSON audit report."
     },
     {
-      "id": "discoverability-audit",
-      "path": "skills/discoverability-audit",
-      "description": "Dedicated skill for off-site AI readiness checks: robots.txt AI crawler access (self-enforced, not just reported), llms.txt, JSON-LD structured data, JS-render gaps, facts locked in non-text media (images/canvas/PDF), freshness, and cross-web entity corroboration with a live spot-check for contradicted/mistaken-identity claims."
+      "id": "crawl-render-audit",
+      "path": "skills/crawl-render-audit",
+      "description": "Dedicated skill for off-site AI discoverability: robots.txt AI crawler access, XML sitemap verification, llms.txt, JSON-LD structured data, JS-render gaps, and non-text media trapping (images/canvas/PDF)."
+    },
+    {
+      "id": "freshness-corroboration",
+      "path": "skills/freshness-corroboration",
+      "description": "Dedicated skill for cross-web entity corroboration, brand naming collision/ambiguity detection via knowledge graph search, and temporal freshness signals."
     },
     {
       "id": "engagement-audit",
       "path": "skills/engagement-audit",
-      "description": "Dedicated skill running its own deterministic, robots.txt-respecting crawl for on-site retention checks: above-the-fold value proposition clarity, landing orientation, information density, CTA friction, and layout-shift risk."
+      "description": "Dedicated skill running an independent, robots.txt-respecting crawl for on-site retention: above-the-fold value proposition clarity, landing orientation, information density, CTA friction, and layout-shift risk."
     }
   ]
 }

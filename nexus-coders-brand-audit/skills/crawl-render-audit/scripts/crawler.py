@@ -154,6 +154,15 @@ class BrandAuditCrawler:
         except Exception:
             pass
 
+        # Probe default /sitemap.xml if not explicitly declared in robots.txt
+        if not sitemaps:
+            try:
+                sitemap_resp = self._safe_get(f"{self.base_url}/sitemap.xml")
+                if sitemap_resp.status_code == 200 and ("xml" in sitemap_resp.headers.get("content-type", "").lower() or "<urlset" in sitemap_resp.text.lower() or "<sitemapindex" in sitemap_resp.text.lower()):
+                    sitemaps.append(f"{self.base_url}/sitemap.xml")
+            except Exception:
+                pass
+
         self.robots_rules = {
             "exists": bool(raw_text),
             "blocked_ai_bots": blocked_bots,
@@ -236,6 +245,11 @@ class BrandAuditCrawler:
         try:
             res = self._safe_get(url)
         except Exception as e:
+            return None, []
+
+        if res.status_code != 200:
+            # Error pages (404/500/etc.) are frequently served as text/html too;
+            # treating them as real content would pollute downstream metrics with error-page noise.
             return None, []
 
         content_type = res.headers.get("content-type", "").lower()
@@ -550,7 +564,40 @@ class BrandAuditCrawler:
             finding_idx += 1
 
         # -------------------------------------------------------------
-        # 8. Proactive "Beyond-Defect" Recommendation: FAQPage Microdata
+        # 8. Missing XML Sitemap Discovery (Low)
+        # -------------------------------------------------------------
+        if not self.sitemap_urls:
+            findings.append({
+                "id": f"F-{finding_idx:03d}",
+                "title": "No XML Sitemap Declared in robots.txt or at /sitemap.xml",
+                "severity": "low",
+                "evidence": f"Neither robots.txt nor /sitemap.xml declares an XML sitemap index. AI search retrieval crawlers must discover canonical content purely through hyperlink traversal, leaving deep interior pages unindexed.",
+                "suggested_action": {
+                    "summary": f"Publish an XML sitemap (sitemap.xml) and declare it via 'Sitemap: {self.base_url}/sitemap.xml' in robots.txt to ensure immediate discovery of all canonical pages.",
+                    "priority": "low"
+                }
+            })
+            finding_idx += 1
+
+        # -------------------------------------------------------------
+        # 9. Canonical URL Tag Coverage (Low)
+        # -------------------------------------------------------------
+        missing_canonical_pages = df[df["has_canonical"] == False]
+        if len(missing_canonical_pages) / total_pages > 0.4:
+            findings.append({
+                "id": f"F-{finding_idx:03d}",
+                "title": "Missing Canonical URL Tags Across Sampled Pages",
+                "severity": "low",
+                "evidence": f"{len(missing_canonical_pages)}/{total_pages} sampled pages lack a <link rel='canonical'> tag. Search engines and AI scrapers risk indexing URL parameter variations or duplicate fragments.",
+                "suggested_action": {
+                    "summary": "Inject self-referential <link rel='canonical' href='...'> tags into the <head> of all public page templates to consolidate citation authority.",
+                    "priority": "low"
+                }
+            })
+            finding_idx += 1
+
+        # -------------------------------------------------------------
+        # 10. Proactive "Beyond-Defect" Recommendation: FAQPage Microdata
         # -------------------------------------------------------------
         has_faq_schema = any("FAQPage" in types for types in df["schema_types"])
         if not has_faq_schema:

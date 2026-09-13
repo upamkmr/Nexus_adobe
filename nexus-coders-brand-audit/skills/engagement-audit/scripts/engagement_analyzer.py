@@ -132,6 +132,10 @@ class EngagementAnalyzer:
         except Exception:
             return None, []
 
+        if res.status_code != 200:
+            # Discard error pages (404/500) so error markup does not skew engagement metrics
+            return None, []
+
         content_type = res.headers.get("content-type", "").lower()
         if "text/html" not in content_type:
             return None, []

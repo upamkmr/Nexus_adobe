@@ -4,10 +4,11 @@ Nexus Coders - Single Entrypoint Audit Orchestrator & Synthesizer
 Part of the nexus-coders-brand-audit Agent Skill Marketplace (Adobe University Hackathon 2026 - Round 3).
 
 Coordinates the multi-skill audit pipeline:
-1. Executes discoverability-audit (crawler.py) for off-site AI discoverability & crawler readiness.
-2. Executes engagement-audit (engagement_analyzer.py) for on-site visitor retention & UX friction.
-3. Captures their respective outputs and mathematically merges summary counts and concatenates findings.
-4. Emits a Single Unified Audit Report strictly conforming to the Adobe Hackathon Round 3 JSON schema.
+1. Executes crawl-render-audit (crawler.py) for off-site AI discoverability, crawler readiness, and render gaps.
+2. Executes freshness-corroboration (corroboration_checker.py) for entity disambiguation and temporal freshness.
+3. Executes engagement-audit (engagement_analyzer.py) for on-site visitor retention, orientation, and UX friction.
+4. Synthesizes cross-skill correlations, deduplicates overlapping signals, and mathematically sums summary counts.
+5. Emits a Single Unified Audit Report strictly conforming to the Adobe Hackathon Round 3 JSON schema floor.
 """
 
 import sys
@@ -21,7 +22,7 @@ from typing import Dict, List, Any, Optional, Tuple
 
 
 class AuditOrchestrator:
-    """Orchestrates discoverability and engagement sub-skills and synthesizes a unified audit report."""
+    """Orchestrates specialized sub-skills and synthesizes a single unified audit report."""
 
     def __init__(
         self,
@@ -30,7 +31,8 @@ class AuditOrchestrator:
         timeout: int = 6,
         disc_pages: Optional[int] = None,
         eng_pages: Optional[int] = None,
-        deduplicate: bool = False,
+        run_corroboration: bool = True,
+        deduplicate: bool = True,
         verbose: bool = True
     ):
         self.raw_url = base_url
@@ -38,6 +40,7 @@ class AuditOrchestrator:
         self.timeout = timeout
         self.disc_pages = disc_pages if disc_pages is not None else max_pages
         self.eng_pages = eng_pages if eng_pages is not None else min(10, max_pages)
+        self.run_corroboration = run_corroboration
         self.deduplicate = deduplicate
         self.verbose = verbose
 
@@ -63,9 +66,7 @@ class AuditOrchestrator:
     def _resolve_script_paths(self):
         """Locates the child scripts within the skills marketplace hierarchy."""
         current_script_dir = os.path.dirname(os.path.abspath(__file__))
-        
-        # Look for skills directory relative to this script:
-        # Expected: <marketplace_root>/skills/audit-orchestrator/scripts/orchestrator.py
+
         candidate_skills_dirs = [
             os.path.abspath(os.path.join(current_script_dir, "..", "..")),
             os.path.abspath(os.path.join(os.getcwd(), "nexus-coders-brand-audit", "skills")),
@@ -73,45 +74,70 @@ class AuditOrchestrator:
         ]
 
         self.crawler_path = None
+        self.corroboration_path = None
         self.engagement_path = None
 
         for s_dir in candidate_skills_dirs:
-            c_candidate = os.path.join(s_dir, "discoverability-audit", "scripts", "crawler.py")
+            # Check crawl-render-audit or discoverability-audit
+            c_candidate = os.path.join(s_dir, "crawl-render-audit", "scripts", "crawler.py")
+            if not os.path.isfile(c_candidate):
+                c_candidate = os.path.join(s_dir, "discoverability-audit", "scripts", "crawler.py")
+
+            corr_candidate = os.path.join(s_dir, "freshness-corroboration", "scripts", "corroboration_checker.py")
             e_candidate = os.path.join(s_dir, "engagement-audit", "scripts", "engagement_analyzer.py")
-            if os.path.isfile(c_candidate) and os.path.isfile(e_candidate):
+
+            if os.path.isfile(c_candidate) and not self.crawler_path:
                 self.crawler_path = c_candidate
+            if os.path.isfile(corr_candidate) and not self.corroboration_path:
+                self.corroboration_path = corr_candidate
+            if os.path.isfile(e_candidate) and not self.engagement_path:
                 self.engagement_path = e_candidate
+
+            if self.crawler_path and self.engagement_path:
                 break
 
+        # Fallback search if still not found
         if not self.crawler_path or not self.engagement_path:
-            # Fallback search
             for root, _, files in os.walk(os.path.abspath(os.path.join(current_script_dir, "..", "..", ".."))):
                 if "crawler.py" in files and not self.crawler_path:
                     self.crawler_path = os.path.join(root, "crawler.py")
+                if "corroboration_checker.py" in files and not self.corroboration_path:
+                    self.corroboration_path = os.path.join(root, "corroboration_checker.py")
                 if "engagement_analyzer.py" in files and not self.engagement_path:
                     self.engagement_path = os.path.join(root, "engagement_analyzer.py")
 
-    def _run_sub_script(self, script_path: str, label: str, pages: int) -> Dict[str, Any]:
+    def _run_sub_script(self, script_path: str, label: str, extra_args: Optional[List[str]] = None) -> Dict[str, Any]:
         """Runs a sub-skill analyzer script as a subprocess and parses its JSON output."""
         if not script_path or not os.path.isfile(script_path):
-            raise FileNotFoundError(f"Sub-skill script for '{label}' not found at: {script_path}")
+            self._log(f"Warning: Script for '{label}' not found at: {script_path}. Skipping gracefully.")
+            return {
+                "site": self.netloc or "unknown",
+                "audited_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "summary": {"total_findings": 0, "critical": 0, "high": 0, "medium": 0, "low": 0},
+                "findings": []
+            }
 
-        cmd = [
-            sys.executable,
-            script_path,
-            self.base_url,
-            "--max-pages", str(pages),
-            "--timeout", str(self.timeout)
-        ]
+        cmd = [sys.executable, script_path, self.base_url, "--timeout", str(self.timeout)]
+        if extra_args:
+            cmd.extend(extra_args)
 
         self._log(f"Executing {label}: {' '.join(cmd)}")
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False
-        )
+        try:
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False
+            )
+        except Exception as exc:
+            self._log(f"Failed to launch {label}: {exc}")
+            return {
+                "site": self.netloc or "unknown",
+                "audited_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "summary": {"total_findings": 0, "critical": 0, "high": 0, "medium": 0, "low": 0},
+                "findings": []
+            }
 
         stdout = proc.stdout.strip()
         if proc.returncode != 0 and not stdout:
@@ -133,20 +159,18 @@ class AuditOrchestrator:
                 }]
             }
 
-        # Parse JSON from stdout (handles any surrounding logs)
         try:
             return json.loads(stdout)
         except json.JSONDecodeError:
-            # Locate first '{' and last '}'
             start = stdout.find("{")
             end = stdout.rfind("}")
             if start != -1 and end != -1 and end > start:
                 try:
                     return json.loads(stdout[start:end + 1])
-                except json.JSONDecodeError as ex:
+                except json.JSONDecodeError:
                     pass
 
-            self._log(f"Failed to parse JSON output from {label}. Stdout: {stdout[:200]}")
+            self._log(f"Failed to parse JSON output from {label}. Stdout snippet: {stdout[:200]}")
             return {
                 "site": self.netloc or "unknown",
                 "audited_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -163,38 +187,54 @@ class AuditOrchestrator:
                 }]
             }
 
-    def merge(self, disc_report: Dict[str, Any], eng_report: Dict[str, Any]) -> Dict[str, Any]:
+    def merge(self, reports: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Merges discoverability and engagement reports into a Single Unified Audit Report.
-        Mathematically sums summary counts from both sub-skills and concatenates findings into one array.
+        Merges sub-skill reports into a Single Unified Audit Report.
+        Mathematically sums summary counts from all sub-skills and concatenates findings into one array.
+        Eliminates duplicate collisions and guarantees strict schema conformance.
         """
-        site = disc_report.get("site") or eng_report.get("site") or self.netloc or "unknown"
+        site = self.netloc or "unknown"
+        for r in reports:
+            if r.get("site") and r.get("site") != "unknown":
+                site = r.get("site")
+                break
 
-        disc_findings = disc_report.get("findings", [])
-        eng_findings = eng_report.get("findings", [])
+        raw_findings: List[Dict[str, Any]] = []
+        for r in reports:
+            raw_findings.extend(r.get("findings", []))
 
+        # Deduplicate findings with matching titles or identical root causes
         if self.deduplicate:
-            # Optional deduplication if requested: merge identical titles
-            seen_titles = {}
-            merged_raw = []
-            for f in (disc_findings + eng_findings):
+            seen_titles: Dict[str, Dict[str, Any]] = {}
+            merged_raw: List[Dict[str, Any]] = []
+            for f in raw_findings:
                 norm_title = f.get("title", "").strip().lower()
+                # Also normalize common variant titles
+                if "sameas" in norm_title or "knowledge graph" in norm_title:
+                    norm_title = "entity_ambiguity_sameas_key"
+
                 if norm_title in seen_titles:
                     existing = seen_titles[norm_title]
-                    # Append additional evidence
                     if f.get("evidence") and f.get("evidence") not in existing.get("evidence", ""):
-                        existing["evidence"] = f"{existing.get('evidence', '')} | Additional context: {f.get('evidence')}"
+                        existing["evidence"] = f"{existing.get('evidence', '')} | Additional corroboration: {f.get('evidence')}"
                 else:
                     new_entry = dict(f)
                     seen_titles[norm_title] = new_entry
                     merged_raw.append(new_entry)
             raw_concatenated = merged_raw
         else:
-            raw_concatenated = list(disc_findings) + list(eng_findings)
+            raw_concatenated = list(raw_findings)
+
+        # Sort findings logically: critical first, then high, medium, low
+        severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        sorted_findings = sorted(
+            raw_concatenated,
+            key=lambda item: severity_order.get(item.get("severity", "medium").lower(), 2)
+        )
 
         # Sequentially re-index findings F-001, F-002, ... for clean contiguous IDs
         merged_findings = []
-        for idx, finding in enumerate(raw_concatenated, start=1):
+        for idx, finding in enumerate(sorted_findings, start=1):
             entry = dict(finding)
             entry["id"] = f"F-{idx:03d}"
             merged_findings.append(entry)
@@ -219,16 +259,41 @@ class AuditOrchestrator:
         return unified_report
 
     def run(self) -> Dict[str, Any]:
-        """Runs discoverability and engagement audits, captures outputs, and merges into unified report."""
+        """Runs crawl-render, freshness-corroboration, and engagement audits, merging into unified report."""
         self._log(f"Starting end-to-end unified brand audit for: {self.base_url}")
-        self._log(f"Crawler path: {self.crawler_path}")
+        self._log(f"Crawl-render path: {self.crawler_path}")
+        self._log(f"Freshness-corroboration path: {self.corroboration_path}")
         self._log(f"Engagement path: {self.engagement_path}")
 
-        disc_report = self._run_sub_script(self.crawler_path, "discoverability-audit", self.disc_pages)
-        eng_report = self._run_sub_script(self.engagement_path, "engagement-audit", self.eng_pages)
+        reports = []
 
-        self._log(f"Captured {len(disc_report.get('findings', []))} discoverability findings and {len(eng_report.get('findings', []))} engagement findings.")
-        unified_report = self.merge(disc_report, eng_report)
+        # 1. Crawl & Render Audit
+        if self.crawler_path:
+            disc_report = self._run_sub_script(
+                self.crawler_path,
+                "crawl-render-audit",
+                ["--max-pages", str(self.disc_pages)]
+            )
+            reports.append(disc_report)
+
+        # 2. Freshness & Corroboration Audit
+        if self.run_corroboration and self.corroboration_path:
+            corr_report = self._run_sub_script(
+                self.corroboration_path,
+                "freshness-corroboration"
+            )
+            reports.append(corr_report)
+
+        # 3. Engagement Audit
+        if self.engagement_path:
+            eng_report = self._run_sub_script(
+                self.engagement_path,
+                "engagement-audit",
+                ["--max-pages", str(self.eng_pages)]
+            )
+            reports.append(eng_report)
+
+        unified_report = self.merge(reports)
         self._log(f"Synthesized Single Unified Audit Report: {unified_report['summary']['total_findings']} total findings.")
 
         return unified_report
@@ -243,10 +308,10 @@ def main():
     parser.add_argument("--disc-pages", type=int, default=None, help="Explicit max pages for discoverability audit")
     parser.add_argument("--eng-pages", type=int, default=None, help="Explicit max pages for engagement audit")
     parser.add_argument("--timeout", type=int, default=6, help="HTTP timeout in seconds (default: 6)")
+    parser.add_argument("--no-corroboration", action="store_true", help="Skip the freshness & entity corroboration sub-skill")
     parser.add_argument("--output", "-o", help="Path to write the Single Unified Audit Report (JSON)")
-    parser.add_argument("--save-raw-dir", help="Optional directory to save raw intermediate JSON reports")
-    parser.add_argument("--from-files", nargs=2, metavar=("DISC_JSON", "ENG_JSON"), help="Directly merge two pre-existing JSON report files")
-    parser.add_argument("--deduplicate", action="store_true", help="Deduplicate findings with matching titles across sub-skills")
+    parser.add_argument("--from-files", nargs="+", metavar="REPORT_JSON", help="Directly merge pre-existing JSON report files")
+    parser.add_argument("--no-dedup", action="store_true", help="Disable deduplication across sub-skill findings")
     parser.add_argument("--quiet", "-q", action="store_true", help="Suppress progress logging to stderr")
 
     args = parser.parse_args()
@@ -257,25 +322,21 @@ def main():
         timeout=args.timeout,
         disc_pages=args.disc_pages,
         eng_pages=args.eng_pages,
-        deduplicate=args.deduplicate,
+        run_corroboration=not args.no_corroboration,
+        deduplicate=not args.no_dedup,
         verbose=not args.quiet
     )
 
     if args.from_files:
-        disc_file, eng_file = args.from_files
-        with open(disc_file, "r", encoding="utf-8") as f:
-            disc_report = json.load(f)
-        with open(eng_file, "r", encoding="utf-8") as f:
-            eng_report = json.load(f)
-        report = orchestrator.merge(disc_report, eng_report)
+        loaded_reports = []
+        for fpath in args.from_files:
+            with open(fpath, "r", encoding="utf-8") as f:
+                loaded_reports.append(json.load(f))
+        report = orchestrator.merge(loaded_reports)
     else:
         if not args.url:
             parser.error("A target URL or domain is required unless --from-files is provided.")
         report = orchestrator.run()
-
-    if args.save_raw_dir and hasattr(orchestrator, "_last_disc_report"):
-        os.makedirs(args.save_raw_dir, exist_ok=True)
-        # If needed in future extensions
 
     output_json = json.dumps(report, indent=2)
     if args.output:
