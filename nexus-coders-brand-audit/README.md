@@ -1,58 +1,58 @@
 # Nexus Coders: Brand AI-Readiness & Engagement Audit Marketplace
 
 > **Adobe University Hackathon 2026 — Round 3: Build the Agent Skill Marketplace**  
-> An autonomous, multi-skill agent marketplace built strictly to the `agentskills.io` standard. Evaluates any website for **off-site AI discoverability** (getting found and cited by AI assistants), **cross-web entity corroboration & freshness** (trust, disambiguation, and non-staleness), and **on-site visitor engagement** (retaining visitors upon arrival), emitting prioritized, mechanism-sound fixes and proactive improvements.
+> An autonomous, multi-skill agent marketplace built strictly to the `agentskills.io` standard. Evaluates any website for **off-site AI discoverability** (crawlability, entity corroboration, freshness, AI-summary readiness), and **on-site visitor engagement** (retention, orientation, email-digest content readiness), emitting prioritized, mechanism-sound fixes with concrete code/directive examples.
 
 ---
 
 ## 1. Overview & System Mission
 
-Modern search and information retrieval have shifted: AI assistants (ChatGPT, Claude, Perplexity, Gemini) act as autonomous answer engines. When an AI assistant evaluates a brand, three things must succeed:
-1. **The crawler must be allowed in** (`robots.txt` AI directives, XML sitemaps).
-2. **The crawler must be able to read facts** (structured JSON-LD, SSR vs client-side hydration, accessible text without canvas/PDF traps).
-3. **The AI must trust and corroborate the brand** (cross-web knowledge graph links, non-colliding entity identity, freshness signals).
+Modern information retrieval is driven by AI assistants (ChatGPT, Claude, Perplexity, Gemini) acting as autonomous answer engines. For a brand to be found, trusted, and correctly cited, three things must succeed:
 
-When an AI assistant cites a brand and sends a visitor through a deep link, the website must immediately orient and retain that visitor. If the landing page presents a confusing value proposition, skipped heading hierarchies, CTA friction, or a broken mobile viewport, the visitor bounces immediately.
+1. **The crawler must be allowed in** — `robots.txt` AI directives, XML sitemaps, `llms.txt`.
+2. **The crawler must be able to read facts** — structured JSON-LD, SSR vs client-side hydration, accessible text without canvas/PDF traps.
+3. **The AI must trust, corroborate, and personalize the brand** — cross-web knowledge graph links, non-colliding entity identity, freshness signals, OpenGraph metadata, hreflang locale tags.
 
-The **Nexus Coders Brand Audit Marketplace** encodes this reasoning into reusable agent skills. Pointed at any URL, it autonomously crawls the target, analyzes signals using **Pandas**, and emits an evidence-backed audit report conforming to the required JSON schema floor.
+When an AI assistant cites a brand and sends a visitor through a deep link, the website must immediately orient and retain that visitor. And when the AI summarizes the brand in emails or chat, the key content must survive summarization (Appendix F).
+
+The **Nexus Coders Brand Audit Marketplace** encodes this reasoning into reusable agent skills, operating as a clean two-concern decomposition matching the Round 2 problem statement:
+- **Off-site discoverability** — why the brand isn't found or cited (merged with entity corroboration and freshness into one cohesive skill)
+- **On-site engagement** — why visitors who do arrive don't stay (enhanced with AI-summary and email-digest readiness)
 
 ---
 
 ## 2. Marketplace Architecture & Composition
 
-The marketplace follows the `agentskills.io` standard with a clear separation of concerns across 4 focused skills:
+The marketplace follows the `agentskills.io` standard with genuine separation of concerns across 3 skills:
 
 ```text
 nexus-coders-brand-audit/
-├── marketplace.json                <- Manifest listing all 4 skills and designating the entrypoint
-├── requirements.txt                <- Declared dependencies (requests, beautifulsoup4, pandas)
+├── marketplace.json                <- Manifest: 3 skills, 1 designated entrypoint
+├── requirements.txt                <- Declared dependencies (requests, beautifulsoup4, pandas, tldextract)
 ├── LICENSE                         <- Apache-2.0 open-source license
-├── README.md                       <- Marketplace documentation explaining composition and execution
+├── README.md                       <- This documentation
 └── skills/
     ├── audit-orchestrator/         <- [ENTRYPOINT] Coordinates audit pipeline & emits final JSON report
     │   ├── SKILL.md
     │   └── scripts/
     │       └── orchestrator.py     <- Master runner, dynamic resolver & mathematical merge engine
-    ├── crawl-render-audit/         <- Dedicated skill for off-site AI readiness & crawlability
+    ├── discoverability-audit/      <- Unified off-site AI readiness, entity corroboration & freshness
     │   ├── SKILL.md
     │   ├── scripts/
-    │   │   └── crawler.py          <- Pandas-powered quantitative crawler & data analyzer
+    │   │   └── crawler.py          <- Pandas-powered crawler, Wikipedia entity checker, tldextract brand parser
     │   └── references/
-    ├── freshness-corroboration/    <- Dedicated skill for entity disambiguation & freshness
-    │   ├── SKILL.md
-    │   ├── scripts/
-    │   │   └── corroboration_checker.py  <- Knowledge graph entity lookup & staleness detector
-    │   └── references/
-    │       └── corroboration-guide.md    <- Reference methodology for agent WebSearch spot-checks
-    └── engagement-audit/           <- Dedicated skill for on-site visitor retention checks
+    │       └── corroboration-guide.md  <- Reference for agent WebSearch spot-checks
+    └── engagement-audit/           <- On-site visitor retention & AI-summary readiness
         ├── SKILL.md
         ├── scripts/
-        │   └── engagement_analyzer.py    <- Pandas-powered quantitative UX/retention analyzer
+        │   └── engagement_analyzer.py  <- Pandas-powered UX/retention/email-readiness analyzer
         └── references/
-            └── checklist.md        <- Qualitative judgment-call guidelines (progressive disclosure)
+            └── checklist.md        <- Qualitative judgment-call guidelines (7 dimensions + Appendix E/F)
 ```
 
-All audit sub-skills are **self-contained and deterministic**: each performs its own read-only, `robots.txt`-respecting crawl (standard library `RobotFileParser`, polite crawl delay) and computes findings from concrete HTML signals via Pandas — neither depends on the other having run first, so either can be reused standalone outside this marketplace.
+### Why 3 Skills (Not 4)
+
+The PDF problem statement explicitly frames the audit as two halves: **off-site discoverability** and **on-site engagement**. Entity corroboration, freshness signals, and AI-summary readiness are aspects of the *same question* — "Can AI find and correctly cite this brand?" — so they belong in the discoverability skill, not as separate padding. This two-concern decomposition (plus the orchestrator entrypoint) reflects genuine separation of concerns.
 
 ### Composition Flow
 
@@ -60,28 +60,20 @@ All audit sub-skills are **self-contained and deterministic**: each performs its
 flowchart TD
     User["User / Agent Request (Target URL)"] --> Entrypoint["skills/audit-orchestrator\n(scripts/orchestrator.py)"]
     
-    subgraph Discoverability ["Off-Site AI Discoverability"]
-        Entrypoint --> CrawlSkill["skills/crawl-render-audit"]
-        CrawlSkill --> Crawler["scripts/crawler.py\n(robots.txt-respecting, Pandas aggregation)"]
-        Crawler --> CrawlFindings["Empirical Metrics:\n• robots.txt AI Bot Directives\n• XML Sitemap Availability (/sitemap.xml)\n• Schema.org JSON-LD Coverage %\n• JS Skeleton / SSR Hydration Gaps\n• Non-Text Media Lock (Alt % / Canvas / PDF-only)\n• Canonical Tag Coverage\n• llms.txt Availability\n• Proactive FAQPage Schema"]
+    subgraph Discoverability ["Off-Site AI Discoverability & Entity Corroboration"]
+        Entrypoint --> DiscSkill["skills/discoverability-audit"]
+        DiscSkill --> Crawler["scripts/crawler.py\n(robots.txt-respecting, Pandas, tldextract, Wikipedia API)"]
+        Crawler --> DiscFindings["Checks:\n• robots.txt AI Bot Directives\n• XML Sitemap (/sitemap.xml)\n• Schema.org JSON-LD Coverage %\n• JS Skeleton / SPA Detection\n• Non-Text Media Lock (Alt/Canvas/PDF)\n• Canonical Tag Coverage\n• llms.txt Availability\n• Wikipedia Entity Disambiguation\n• sameAs Knowledge Graph Links\n• OpenGraph Metadata (Appendix E)\n• hreflang Locale Tags (Appendix E)\n• AI-Summary Content Ratios (Appendix F)\n• Copyright Freshness"]
     end
 
-    subgraph Corroboration ["Entity Corroboration & Freshness"]
-        Entrypoint --> CorrSkill["skills/freshness-corroboration"]
-        CorrSkill --> CorrScript["scripts/corroboration_checker.py\n(Wikipedia API & Schema inspect)"]
-        CorrScript --> CorrFindings["Entity Grounding Signals:\n• Knowledge Graph Entity Ambiguity & Naming Collisions\n• Authoritative sameAs Links (Wikidata/LinkedIn/Crunchbase)\n• Temporal Freshness & Copyright Staleness"]
-        CorrSkill -.agent WebSearch mode.-> CorrobRef["references/corroboration-guide.md"]
-    end
-
-    subgraph Engagement ["On-Site Visitor Retention"]
+    subgraph Engagement ["On-Site Visitor Retention & AI-Summary Readiness"]
         Entrypoint --> EngSkill["skills/engagement-audit"]
-        EngSkill --> EngScript["scripts/engagement_analyzer.py\n(robots.txt-respecting, Pandas aggregation)"]
-        EngScript --> EngFindings["UX Retention Signals:\n• Above-The-Fold Value Prop (5s Rule)\n• Deep-Link Landing Orientation & Breadcrumbs\n• Long Prose Blocks / Scannability\n• CTA Vagueness % & Dead-End Pages\n• Mobile Viewport & Layout-Shift Risk\n• Proactive Instant-Value Widget"]
-        EngScript -.qualitative checklist.-> CheckRef["references/checklist.md"]
+        EngSkill --> EngScript["scripts/engagement_analyzer.py\n(robots.txt-respecting, Pandas)"]
+        EngScript --> EngFindings["Checks:\n• Above-The-Fold Value Prop (5s Rule)\n• Deep-Link Orientation & Breadcrumbs\n• Scannability & Heading Hierarchy\n• CTA Vagueness & Dead-End Pages\n• Mobile Viewport & Layout-Shift\n• Email-Digest Content Readiness (Appendix F)\n• Above-Fold Personalization Density (Appendix E)\n• Proactive Instant-Value Widget"]
+        EngScript -.qualitative checklist.-> CheckRef["references/checklist.md\n(7 dimensions + Appendix E/F)"]
     end
 
-    CrawlFindings --> MergeEngine["Orchestrator Merge Engine\n• Mathematical Sum of Severity Counts\n• Sequential Findings Concatenation (F-001...)\n• Cross-Skill Deduplication & Correlation\n• Proactive Recommendations Synthesis"]
-    CorrFindings --> MergeEngine
+    DiscFindings --> MergeEngine["Orchestrator Merge Engine\n• Mathematical Sum of Severity Counts\n• Sequential Findings (F-001...)\n• Cross-Skill Deduplication\n• Proactive Recommendations"]
     EngFindings --> MergeEngine
     MergeEngine --> FinalReport["Single Unified Audit Report\n(Strict JSON Schema Floor)"]
 ```
@@ -92,64 +84,70 @@ flowchart TD
 
 ### A. `audit-orchestrator` (Designated Entrypoint)
 - **Role**: Coordinates the overall audit lifecycle and emits the single unified audit report.
-- **Engine**: [scripts/orchestrator.py](skills/audit-orchestrator/scripts/orchestrator.py) — executes `crawler.py`, `corroboration_checker.py`, and `engagement_analyzer.py`, captures outputs, mathematically sums the severity counts (`total_findings`, `critical`, `high`, `medium`, `low`), and concatenates findings into a single sequentially-indexed array (`F-001`, `F-002`, ...).
-- **Actions**:
-  - Ingests and normalizes the target domain.
-  - Dispatches tasks to all sub-skills with polite execution delays and SSL fallbacks.
-  - Mathematically sums summary counts across sub-skills.
-  - Concatenates findings and prevents duplicate ID collisions.
-  - Synthesizes proactive "beyond-defect" suggestions.
-  - Emits the validated, single unified JSON audit report.
+- **Engine**: [orchestrator.py](skills/audit-orchestrator/scripts/orchestrator.py) — executes `crawler.py` and `engagement_analyzer.py`, mathematically sums severity counts, concatenates and deduplicates findings, and emits the validated report.
 
-### B. `crawl-render-audit` (Off-Site AI Readiness)
-- **Role**: Tests whether AI retrieval bots can crawl, extract, and index canonical brand facts.
-- **Engine**: [scripts/crawler.py](skills/crawl-render-audit/scripts/crawler.py) uses **Pandas** for vectorized metric aggregation:
-  - `schema_coverage_pct = (df['has_schema'].sum() / len(df)) * 100`
-  - `missing_alt_pct = (df['missing_alt_images'].sum() / df['total_images'].sum()) * 100`
-  - `is_js_skeleton = (df['text_length'] < 250) & (raw_html contains SPA roots)`
-- **Key Checks**: AI bot access (`GPTBot`, `ClaudeBot`, `PerplexityBot`), XML Sitemap declarations, `llms.txt`, Schema.org types (`Organization`, `Product`, `FAQPage`, `BreadcrumbList`), canonical tags, and non-text locks (alt text, canvas graphics, and PDF-only content). Discards HTTP error pages (404/500) to prevent false-positive noise.
+### B. `discoverability-audit` (Off-Site AI Readiness + Entity Corroboration)
+- **Role**: Tests whether AI retrieval bots can crawl, extract, trust, corroborate, and correctly cite brand facts.
+- **Engine**: [crawler.py](skills/discoverability-audit/scripts/crawler.py) — unified auditor covering:
+  - AI bot access, XML sitemaps, `llms.txt`, canonical tags
+  - Schema.org JSON-LD structured data with **Pandas** vectorized aggregation
+  - SPA/JS skeleton detection with improved framework-marker heuristics
+  - Non-text content traps (alt text, canvas, PDF-only)
+  - Wikipedia/Wikidata entity disambiguation via public OpenSearch API
+  - `sameAs` knowledge graph link verification
+  - Copyright/freshness staleness signals
+  - **OpenGraph metadata** completeness for AI personalization (Appendix E)
+  - **hreflang locale tags** for geographically personalized responses (Appendix E)
+  - **AI-summary content ratios** — image-heavy pages poorly suited for email digests (Appendix F)
+  - Brand name extraction via **tldextract** for TLD-aware domain parsing
 
-### C. `freshness-corroboration` (Entity Corroboration & Freshness)
-- **Role**: Determines whether the brand's entity identity is grounded in external knowledge graphs, tests for naming collisions, and inspects temporal freshness.
-- **Engine**: [scripts/corroboration_checker.py](skills/freshness-corroboration/scripts/corroboration_checker.py) queries Wikipedia / Wikidata APIs to detect entity ambiguity, inspects Schema `sameAs` links, and checks `Last-Modified` headers and copyright timestamps.
-
-### D. `engagement-audit` (On-Site Visitor Retention)
-- **Role**: Tests why human visitors who arrive from AI citations stay or bounce.
-- **Engine**: [scripts/engagement_analyzer.py](skills/engagement-audit/scripts/engagement_analyzer.py) crawls up to 10 interior pages to measure the "5-second rule" (H1 clarity), persistent navigation landmarks, breadcrumbs for deep arrivals, scannability (dense unbroken text), CTA dead-ends, and mobile viewport readiness.
+### C. `engagement-audit` (On-Site Visitor Retention + AI-Summary Readiness)
+- **Role**: Tests why human visitors who arrive from AI citations stay or bounce, and whether content survives AI summarization.
+- **Engine**: [engagement_analyzer.py](skills/engagement-audit/scripts/engagement_analyzer.py) — 7 engagement dimensions:
+  - H1 clarity, breadcrumbs, scannability, CTA friction, mobile viewport, layout-shift risk
+  - **Email-digest content readiness** — pages with high image-to-text ratios (Appendix F)
+  - **Above-the-fold personalization density** — substantive first-visible text for AI matching (Appendix E)
 
 ---
 
 ## 4. How to Run an Audit
 
 ### 1. Single-Entrypoint Full Audit (Recommended)
-Run the master orchestrator to execute all 3 sub-skills and emit the Single Unified Audit Report:
 ```bash
 python3 skills/audit-orchestrator/scripts/orchestrator.py https://example.com --max-pages 15 --output unified_audit_report.json
 ```
 
 ### 2. Standalone Sub-Skill Execution
-Each sub-skill can also be invoked independently as a portable CLI:
 ```bash
-# Off-Site AI Discoverability
-python3 skills/crawl-render-audit/scripts/crawler.py https://example.com --max-pages 15 --output discoverability_report.json
+# Off-Site AI Discoverability + Entity Corroboration
+python3 skills/discoverability-audit/scripts/crawler.py https://example.com --max-pages 15 --output discoverability_report.json
 
-# Freshness & Knowledge Graph Corroboration
-python3 skills/freshness-corroboration/scripts/corroboration_checker.py https://example.com --output corroboration_report.json
-
-# On-Site Visitor Retention
+# On-Site Visitor Retention + AI-Summary Readiness
 python3 skills/engagement-audit/scripts/engagement_analyzer.py https://example.com --max-pages 10 --output engagement_report.json
 ```
 
 ### 3. Distributed Multi-Agent Merge Mode
-In workflows where sub-skills are run concurrently by separate agents, merge their outputs using:
 ```bash
-python3 skills/audit-orchestrator/scripts/orchestrator.py --from-files discoverability_report.json corroboration_report.json engagement_report.json --output unified_audit_report.json
+python3 skills/audit-orchestrator/scripts/orchestrator.py --from-files discoverability_report.json engagement_report.json --output unified_audit_report.json
 ```
 
 ---
 
 ## 5. Scope & Guardrails
 - **Recommend-only**: No skill modifies a live website; everything is strictly read-only GET/HEAD requests.
-- **Respects `robots.txt`**: Crawlers self-enforce standard `RobotFileParser` compliance and respect declared crawl delays.
-- **Resilient & Portable**: SSL error fallback and timeout safety. Runs in < 1 minute on standard hardware.
-- **Package Size**: Zero heavy model weights; complete marketplace is ~49 KB (limit: 50 MB).
+- **Respects `robots.txt`**: Crawlers self-enforce `RobotFileParser` compliance and respect declared crawl delays.
+- **Resilient & Portable**: SSL error fallback and timeout safety. Runs in < 2 minutes on standard hardware.
+- **Package Size**: Zero heavy model weights; complete marketplace is ~60 KB (limit: 50 MB).
+
+---
+
+## 6. PDF Appendix Coverage
+
+| PDF Appendix | How Addressed | Skill |
+|---|---|---|
+| **A. Search Visibility** | robots.txt AI bot checks, XML sitemap, crawler access | `discoverability-audit` |
+| **B. How Assistants Use Sources** | Schema.org JSON-LD, `llms.txt`, FAQPage proactive | `discoverability-audit` |
+| **C. How Machines Read a Page** | JS skeleton/SPA detection, non-text traps (canvas/PDF/alt), text ratio | `discoverability-audit` |
+| **D. Agreement Across the Web** | Wikipedia entity disambiguation, `sameAs` knowledge graph links, freshness | `discoverability-audit` |
+| **E. Personalization & Prior Context** | OpenGraph metadata, hreflang locale tags, above-fold content density | Both skills |
+| **F. Why Machines Drop Email Content** | AI-summary content ratios, image-to-text analysis, email-digest readiness | Both skills |

@@ -1,6 +1,6 @@
-# On-Site Engagement & Retention Audit Checklist
+# On-Site Engagement, Retention & AI-Summary Readiness Checklist
 
-This reference guide details granular evaluation criteria for assessing on-site visitor retention. When an AI assistant cites a website and a visitor clicks through, they arrive with specific expectations and short attention spans. If the landing experience fails to orient and engage them immediately, they bounce back to the AI assistant.
+This reference guide details granular evaluation criteria for assessing on-site visitor retention and AI-summary readiness. When an AI assistant cites a website and a visitor clicks through, they arrive with specific expectations and short attention spans. If the landing experience fails to orient and engage them immediately, they bounce back to the AI assistant.
 
 ---
 
@@ -62,10 +62,42 @@ This reference guide details granular evaluation criteria for assessing on-site 
 
 ---
 
-## 6. Proactive Engagement Enhancements (Beyond-Defect Levers)
+## 6. AI-Summary & Email-Digest Content Readiness (Appendix F)
+
+AI assistants and email clients increasingly generate summaries of page content and messages. When key content isn't in readable text, the summary has little to work with and important facts disappear.
+
+- **Text-First Content Design**:
+  - Ensure the core value proposition and key facts appear as plain HTML text, not solely in images, hero graphics, or interactive widgets.
+  - Lead every page with a text-based summary before visual content.
+- **Image-to-Text Content Ratio**:
+  - Pages with many images but very little extractable text (< 300 chars) will be poorly summarized.
+  - Maintain a text-to-image ratio of at least 60:40 for content-carrying pages.
+- **Email Newsletter Best Practices**:
+  - Always provide a plain-text version of email content.
+  - Don't rely solely on images to carry the message — include alt text and inline text equivalents.
+  - Keep the "important lines" (subject, key offer, CTA) as readable text, not embedded in image files.
+
+---
+
+## 7. Personalization & Prior-Context Readiness (Appendix E)
+
+AI assistants personalize responses based on user context (location, preferences, conversation history). The site's content should be structured to support this personalization.
+
+- **Above-the-Fold Content Density**:
+  - The first 500 characters of every page should contain specific, substantive content that AI assistants can match against user queries.
+  - Thin above-the-fold content gives the AI little to work with when deciding which page best answers a personalized query.
+- **Context-Aware Referrer Handling**:
+  - Consider detecting AI-assistant referrals (via HTTP referrer) and showing context-aware messaging.
+  - Example: "Looking for the pricing discussed in ChatGPT? Here's the full breakdown."
+- **Structured Audience Signals**:
+  - Use Schema.org `audience` properties and industry qualifiers in structured data to help AI assistants target the right user segments.
+
+---
+
+## 8. Proactive Engagement Enhancements (Beyond-Defect Levers)
 - **Instant Value Realization (Interactive Snippet / Calculator / Preview)**:
-  - Embed lightweight, interactive preview components (e.g., interactive code sandbox, ROI calculator, live search preview) directly on the landing page so visitors experience immediate utility.
+  - Embed lightweight, interactive preview components directly on the landing page so visitors experience immediate utility.
 - **Context-Aware Referrer Personalization**:
-  - Welcome ribbons or tailored hero messaging for visitors referred by AI assistants (e.g., "Looking for the pricing discussed in ChatGPT? Here is the full breakdown.").
+  - Welcome ribbons or tailored hero messaging for visitors referred by AI assistants.
 - **Rapid Search & Instant Answer Widget**:
   - Accessible global search bar (keyboard shortcut `/` or `Cmd+K`) allowing deep-linked visitors to query site resources immediately.

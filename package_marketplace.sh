@@ -17,7 +17,7 @@ import json
 with open('$MARKETPLACE_DIR/marketplace.json') as f:
     data = json.load(f)
 assert 'name' in data and 'version' in data and 'skills' in data
-assert len(data['skills']) == 4, f'Expected 4 skills, found {len(data[\"skills\"])}'
+assert len(data['skills']) == 3, f'Expected 3 skills, found {len(data[\"skills\"])}'
 entrypoints = [s for s in data['skills'] if s.get('entrypoint') is True]
 assert len(entrypoints) == 1, f'Expected exactly 1 entrypoint, found {len(entrypoints)}'
 print(f'   ✓ Manifest valid. Entrypoint: {entrypoints[0][\"id\"]}')
@@ -41,39 +41,33 @@ for skill in data['skills']:
     print(f'   ✓ Skill valid: {skill[\"id\"]}')
 "
 
-echo "3a. Smoke testing crawl-render crawler.py..."
-python3 "$MARKETPLACE_DIR/skills/crawl-render-audit/scripts/crawler.py" --help > /dev/null
+echo "3a. Smoke testing discoverability-audit crawler.py..."
+python3 "$MARKETPLACE_DIR/skills/discoverability-audit/scripts/crawler.py" --help > /dev/null
 echo "   ✓ crawler.py CLI test passed."
 
-echo "3b. Smoke testing freshness-corroboration corroboration_checker.py..."
-python3 "$MARKETPLACE_DIR/skills/freshness-corroboration/scripts/corroboration_checker.py" --help > /dev/null
-echo "   ✓ corroboration_checker.py CLI test passed."
-
-echo "3c. Smoke testing engagement_analyzer.py..."
+echo "3b. Smoke testing engagement_analyzer.py..."
 python3 "$MARKETPLACE_DIR/skills/engagement-audit/scripts/engagement_analyzer.py" --help > /dev/null
 echo "   ✓ engagement_analyzer.py CLI test passed."
 
-echo "3d. Smoke testing orchestrator.py & mathematical merge logic across 3 sub-skills..."
+echo "3c. Smoke testing orchestrator.py & mathematical merge logic across 2 sub-skills..."
 python3 "$MARKETPLACE_DIR/skills/audit-orchestrator/scripts/orchestrator.py" --help > /dev/null
 python3 -c "
 import json, subprocess, tempfile, os, sys
 d1 = {'site': 'ex.com', 'summary': {'total_findings': 2, 'critical': 1, 'high': 1, 'medium': 0, 'low': 0}, 'findings': [{'id': 'F-001', 'severity': 'critical', 'title': 'Robots Blocked'}, {'id': 'F-002', 'severity': 'high', 'title': 'No Schema'}]}
-d2 = {'site': 'ex.com', 'summary': {'total_findings': 1, 'critical': 0, 'high': 0, 'medium': 1, 'low': 0}, 'findings': [{'id': 'F-001', 'severity': 'medium', 'title': 'Entity Collision'}]}
-d3 = {'site': 'ex.com', 'summary': {'total_findings': 1, 'critical': 0, 'high': 0, 'medium': 0, 'low': 1}, 'findings': [{'id': 'F-001', 'severity': 'low', 'title': 'No Breadcrumbs'}]}
-f1, f2, f3, out = tempfile.NamedTemporaryFile('w', delete=False), tempfile.NamedTemporaryFile('w', delete=False), tempfile.NamedTemporaryFile('w', delete=False), tempfile.NamedTemporaryFile('w', delete=False)
+d2 = {'site': 'ex.com', 'summary': {'total_findings': 2, 'critical': 0, 'high': 0, 'medium': 1, 'low': 1}, 'findings': [{'id': 'F-001', 'severity': 'medium', 'title': 'Vague CTAs'}, {'id': 'F-002', 'severity': 'low', 'title': 'No Breadcrumbs'}]}
+f1, f2, out = tempfile.NamedTemporaryFile('w', delete=False), tempfile.NamedTemporaryFile('w', delete=False), tempfile.NamedTemporaryFile('w', delete=False)
 json.dump(d1, f1); f1.close()
 json.dump(d2, f2); f2.close()
-json.dump(d3, f3); f3.close()
 out.close()
-subprocess.run([sys.executable, '$MARKETPLACE_DIR/skills/audit-orchestrator/scripts/orchestrator.py', '--from-files', f1.name, f2.name, f3.name, '--output', out.name, '--quiet'], check=True)
+subprocess.run([sys.executable, '$MARKETPLACE_DIR/skills/audit-orchestrator/scripts/orchestrator.py', '--from-files', f1.name, f2.name, '--output', out.name, '--quiet'], check=True)
 with open(out.name) as fp:
     res = json.load(fp)
 assert res['summary']['total_findings'] == 4
 assert res['summary']['critical'] == 1 and res['summary']['high'] == 1 and res['summary']['medium'] == 1 and res['summary']['low'] == 1
 assert len(res['findings']) == 4
 assert [f['id'] for f in res['findings']] == ['F-001', 'F-002', 'F-003', 'F-004']
-os.remove(f1.name); os.remove(f2.name); os.remove(f3.name); os.remove(out.name)
-print('   ✓ orchestrator.py CLI & 3-skill mathematical merge test passed.')
+os.remove(f1.name); os.remove(f2.name); os.remove(out.name)
+print('   ✓ orchestrator.py CLI & 2-skill mathematical merge test passed.')
 "
 
 echo "4. Generating $ZIP_NAME..."

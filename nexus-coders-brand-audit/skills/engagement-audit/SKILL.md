@@ -1,13 +1,13 @@
 ---
 name: engagement-audit
-description: Dedicated skill for auditing a website's on-site visitor engagement, orientation, and retention signals. Deterministically measures above-the-fold value proposition clarity, deep-link navigation orientation, reading density, call-to-action friction, and mobile viewport readiness. Use when diagnosing why visitors referred by AI assistants bounce immediately or fail to convert.
+description: Dedicated skill for auditing a website's on-site visitor engagement, retention, and AI-summary/email-digest readiness. Deterministically measures above-the-fold value proposition clarity, deep-link navigation orientation, reading density, call-to-action friction, mobile viewport readiness, AI email-summary content readiness (Appendix F), and above-the-fold personalization signals (Appendix E). Use when diagnosing why visitors referred by AI assistants bounce or why content is dropped by AI email summarizers.
 license: Apache-2.0
 allowed-tools: Bash
 ---
 
-# Engagement Audit (On-Site Visitor Retention)
+# Engagement Audit (On-Site Visitor Retention & AI-Summary Readiness)
 
-The `engagement-audit` skill assesses why human visitors who arrive at a website—especially those referred by AI assistant citations—stay, understand the offer, and convert, or bounce immediately. It is self-contained: it performs its own polite, robots.txt-respecting crawl and does not depend on `discoverability-audit` having run first, so it stays portable as a standalone skill.
+The `engagement-audit` skill assesses why human visitors who arrive at a website—especially those referred by AI assistant citations—stay, understand the offer, and convert, or bounce immediately. It also evaluates whether the site's content is structured to survive AI summarization in emails, search snippets, and chat answers (Appendix F). It is self-contained: it performs its own polite, robots.txt-respecting crawl and does not depend on `discoverability-audit` having run first.
 
 ## When to use
 Activate this skill when:
@@ -16,6 +16,8 @@ Activate this skill when:
 - Auditing heading hierarchy, scannability, and information density.
 - Identifying Call-to-Action (CTA) friction, ambiguous buttons, or dead-end pages.
 - Checking mobile viewport readiness and layout-shift risk.
+- Assessing whether content would survive AI email-digest summarization (Appendix F).
+- Evaluating above-the-fold content density for AI-personalized referrals (Appendix E).
 
 ## Inputs
 - **`url`** (string, required): The target website URL or domain to evaluate (e.g. `https://example.com`).
@@ -25,29 +27,32 @@ Activate this skill when:
 ## Procedure (Numbered, Deterministic Steps)
 
 1. **Invoke the Quantitative Analyzer**:
-   Execute the bundled Python analyzer [engagement_analyzer.py](./scripts/engagement_analyzer.py), which crawls the site read-only (GET only, respects `robots.txt`, polite crawl delay) and scores every sampled page:
+   Execute the bundled Python analyzer [engagement_analyzer.py](./scripts/engagement_analyzer.py):
    ```bash
    python3 skills/engagement-audit/scripts/engagement_analyzer.py <target-url> --max-pages 10 --output ./engagement_findings.json
    ```
 
 2. **Cross-Check Against the Detailed Checklist**:
-   For any nuance the script cannot measure statically (hero visual quality, tap-target sizing, true rendered Cumulative Layout Shift, whether CTA copy is contextually accurate), consult [references/checklist.md](./references/checklist.md) and spot-check the rendered page. The script measures the 5 dimensions below with concrete HTML signals; the checklist covers the qualitative judgment calls that require actually looking at the rendered page.
+   For nuances the script cannot measure statically (hero visual quality, tap-target sizing, true rendered CLS), consult [references/checklist.md](./references/checklist.md) and spot-check the rendered page.
 
-3. **The 5 Engagement Dimensions Measured**:
-   - **Value Proposition Clarity**: `<h1>` count/uniqueness and whether it reads as a concrete phrase rather than a single vague word.
-   - **Orientation & Context Retention**: for every non-homepage ("deep") page sampled, presence of a breadcrumb trail (`<nav aria-label="Breadcrumb">` or Schema.org `BreadcrumbList`) or a persistent `<nav>`/`<header>`.
-   - **Scannability & Hierarchy**: count of paragraphs exceeding ~800 characters (proxy for "unbroken prose > 5 lines") and presence of lists.
-   - **CTA Friction & Pathways**: ratio of vague CTA copy ("Click Here", "Learn More") to total detected buttons/CTA-styled links, and the share of pages with zero detectable CTA (dead ends).
-   - **Mobile Viewport & Layout Stability**: `<meta name="viewport">` presence and the share of `<img>` tags missing explicit `width`/`height` (CLS risk).
+3. **The 7 Engagement Dimensions Measured**:
+   - **Value Proposition Clarity**: `<h1>` count/uniqueness and whether it reads as a concrete phrase.
+   - **Orientation & Context Retention**: For non-homepage pages, presence of breadcrumb trails or persistent `<nav>`/`<header>`.
+   - **Scannability & Hierarchy**: Paragraphs exceeding ~800 characters, heading structure, and list usage.
+   - **CTA Friction & Pathways**: Ratio of vague CTA copy to total, and share of pages with zero CTA.
+   - **Mobile Viewport & Layout Stability**: `<meta name="viewport">` and `<img>` width/height attributes.
+   - **AI-Summary & Email-Digest Readiness (Appendix F)**: Image-to-text ratio flagging pages that would be poorly summarized by AI assistants in emails or chat.
+   - **Above-the-Fold Personalization Density (Appendix E)**: Whether the first 500 characters contain enough substantive text for AI assistants to match against user context.
 
 4. **Synthesize Proactive Retention Opportunities**:
-   The analyzer always emits at least one proactive, beyond-defect recommendation (e.g. an above-the-fold instant-value widget for AI-referred visitors) even when no structural defect is found.
+   The analyzer always emits at least one proactive, beyond-defect recommendation (e.g. instant-value widget, context-aware referrer personalization).
 
 5. **Validate Output**:
-   Confirm the emitted JSON conforms to the shared schema (`site`, `audited_at`, `summary`, `findings[]` with `id`/`title`/`severity`/`evidence`/`suggested_action`) before the `audit-orchestrator` merges it.
+   Confirm the emitted JSON conforms to the shared schema before the `audit-orchestrator` merges it.
 
 ## Output
-Emits a structured findings JSON (same schema as `discoverability-audit`) detailing:
-- Identified friction points with concrete quantitative evidence (page counts, ratios).
-- Prioritized design and UX actions to maximize visitor retention and conversion.
-- Proactive engagement levers to elevate user trust.
+Emits a structured findings JSON detailing:
+- Identified friction points with concrete quantitative evidence.
+- AI-summary readiness warnings.
+- Prioritized design and UX actions with code/directive examples.
+- Proactive engagement levers.

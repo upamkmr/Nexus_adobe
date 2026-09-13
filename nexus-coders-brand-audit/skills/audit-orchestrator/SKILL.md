@@ -1,18 +1,18 @@
 ---
 name: audit-orchestrator
-description: Designated entrypoint orchestrator skill for the nexus-coders-brand-audit marketplace. Coordinates specialized sub-skills (crawl-render-audit, freshness-corroboration, engagement-audit), executes audits, captures quantitative outputs, performs cross-skill correlation and mathematical summation, and emits the Single Unified Audit Report strictly conforming to the required schema. Use whenever a full website or domain brand audit is requested.
+description: Designated entrypoint orchestrator skill for the nexus-coders-brand-audit marketplace. Coordinates two specialized sub-skills (discoverability-audit and engagement-audit), executes audits, captures quantitative outputs, performs cross-skill correlation and mathematical summation, and emits the Single Unified Audit Report strictly conforming to the required schema. Use whenever a full website or domain brand audit is requested.
 license: Apache-2.0
 allowed-tools: Bash, WebSearch
 ---
 
 # Audit Orchestrator (Brand AI-Readiness & Engagement Audit)
 
-The `audit-orchestrator` skill is the primary entrypoint for the **Nexus Coders Brand Audit Marketplace**. It receives an audit request for any target website, orchestrates specialized sub-skills across off-site AI discoverability, cross-web corroboration/freshness, and on-site visitor retention, and emits the final unified audit report.
+The `audit-orchestrator` skill is the primary entrypoint for the **Nexus Coders Brand Audit Marketplace**. It receives an audit request for any target website, orchestrates two specialized sub-skills covering off-site AI discoverability (including entity corroboration and freshness) and on-site visitor retention (including AI-summary/email-digest readiness), and emits the final unified audit report.
 
 ## When to use
 Activate this skill when:
 - Conducting an end-to-end audit of a brand's visibility and reputation across AI assistants (ChatGPT, Claude, Perplexity, Gemini).
-- Evaluating why a website fails to get cited, suffers from entity confusion, or experiences high bounce rates from AI referrals.
+- Evaluating why a website fails to get cited, suffers from entity confusion, experiences high bounce rates from AI referrals, or has content dropped by AI email summarizers.
 - Generating a prioritized, evidence-backed audit report conforming strictly to the official Adobe Hackathon Round 3 schema floor.
 
 ## Inputs
@@ -31,52 +31,50 @@ Activate this skill when:
      ```bash
      python3 skills/audit-orchestrator/scripts/orchestrator.py <target-url> --max-pages 15 --output ./unified_audit_report.json
      ```
-   - Alternatively, when running sub-skills separately in distributed multi-agent workflows, merge pre-existing JSON reports via:
+   - Alternatively, merge pre-existing JSON reports:
      ```bash
-     python3 skills/audit-orchestrator/scripts/orchestrator.py --from-files ./crawl_report.json ./corr_report.json ./eng_report.json --output ./unified_audit_report.json
+     python3 skills/audit-orchestrator/scripts/orchestrator.py --from-files ./disc_report.json ./eng_report.json --output ./unified_audit_report.json
      ```
 
-3. **Sub-Skill 1: Off-Site AI Discoverability & Crawl Readiness (`crawl-render-audit`)**:
-   - Executes `skills/crawl-render-audit/scripts/crawler.py` to evaluate:
+3. **Sub-Skill 1: Off-Site AI Discoverability & Entity Corroboration (`discoverability-audit`)**:
+   - Executes `skills/discoverability-audit/scripts/crawler.py` to evaluate:
      - `robots.txt` AI retrieval crawler access (`GPTBot`, `ClaudeBot`, `PerplexityBot`, etc.).
      - XML Sitemap discovery in `robots.txt` and at `/sitemap.xml`.
      - `llms.txt` and `/.well-known/llms.txt` presence for LLM context windows.
      - Schema.org JSON-LD structured data coverage across sampled pages.
-     - Client-side JS rendering gaps (empty skeleton root tags `#root`, `#app`, `#__next`).
-     - Facts locked in non-text media: images missing `alt` text, canvas-rendered graphics, and PDF-only documents.
+     - Client-side JS rendering gaps (SPA shells with framework markers).
+     - Facts locked in non-text media: images missing `alt`, canvas graphics, PDF-only.
      - Canonical URL tag coverage.
-   - Note: The crawler self-enforces robots.txt compliance via `urllib.robotparser.RobotFileParser` for its own traffic, ignoring non-200 error pages.
+     - Cross-web entity disambiguation via Wikipedia/Wikidata API (brand naming collisions).
+     - Authoritative `sameAs` knowledge graph links (Wikidata, LinkedIn, Crunchbase).
+     - Content freshness signals (copyright staleness, `Last-Modified` headers).
+     - OpenGraph metadata completeness for AI personalization (Appendix E).
+     - hreflang locale tags for geographically personalized AI responses (Appendix E).
+     - AI-summary content ratios — pages with high image-to-text ratios poorly suited for email digests (Appendix F).
 
-4. **Sub-Skill 2: Cross-Web Corroboration & Freshness (`freshness-corroboration`)**:
-   - Executes `skills/freshness-corroboration/scripts/corroboration_checker.py` to evaluate:
-     - External knowledge base search (Wikipedia OpenSearch API) to identify brand-name entity ambiguity and naming collisions with other organizations.
-     - Presence of authoritative `sameAs` entity links (Wikidata, Wikipedia, LinkedIn, Crunchbase) in root schema.
-     - Temporal content staleness indicators (outdated copyright years, missing `Last-Modified` headers).
-   - For environments with interactive agent web search tools, consult `skills/freshness-corroboration/references/corroboration-guide.md` to spot-check load-bearing facts.
-
-5. **Sub-Skill 3: On-Site Engagement & Visitor Retention (`engagement-audit`)**:
+4. **Sub-Skill 2: On-Site Engagement & AI-Summary Readiness (`engagement-audit`)**:
    - Executes `skills/engagement-audit/scripts/engagement_analyzer.py` to evaluate:
-     - Above-the-fold value proposition clarity (`<h1>` count, uniqueness, and specificity).
+     - Above-the-fold value proposition clarity (`<h1>` count, uniqueness, specificity).
      - Landing orientation and breadcrumb trails for deep-linked arrivals.
      - Long unbroken prose blocks and reading density.
      - Call-to-Action (CTA) friction and pages with zero detectable CTA (dead ends).
      - Mobile viewport tag presence and layout-shift risk (images missing dimensions).
+     - AI email-digest content readiness — pages where visual content dominates with minimal extractable text (Appendix F).
+     - Above-the-fold personalization density — whether first-visible content gives AI assistants enough to match user context (Appendix E).
 
-6. **Cross-Skill Synthesis & Mathematical Resummation**:
+5. **Cross-Skill Synthesis & Mathematical Resummation**:
    - The orchestrator merges all outputs into a **Single Unified Audit Report**:
-     - **Mathematical Summation**: Computes the exact sum of counts across all sub-skills:
-       - `summary.total_findings = sum(severities) == len(findings)`
-       - Validates that `critical`, `high`, `medium`, and `low` counts match the findings array.
-     - **Findings Concatenation & Re-indexing**: Concatenates and re-indexes all findings sequentially (`F-001`, `F-002`, `F-003`, ...) to eliminate duplicate ID collisions.
-     - **Deduplication & Cross-Skill Correlation**: Intelligently correlates overlapping findings (e.g. structured data + entity links) and merges duplicate titles while preserving evidence context.
+     - **Mathematical Summation**: `summary.total_findings = sum(severities) == len(findings)`.
+     - **Findings Concatenation & Re-indexing**: Sequential `F-001`, `F-002`… to eliminate ID collisions.
+     - **Deduplication & Cross-Skill Correlation**: Merges overlapping findings (e.g., entity + email-summary) while preserving evidence.
 
-7. **Proactive "Beyond-Problem" Opportunities**:
-   - Synthesizes non-obvious proactive enhancements that strengthen AI discovery and retention even where no defect was found:
-     - Schema.org `FAQPage` or `HowTo` structured data to capture direct conversational citations in Perplexity and Google AI Overviews.
-     - `llms.txt` context manifest formatted for LLM token ingestion.
-     - Above-the-fold instant-utility widgets (e.g., live preview, ROI calculator) to retain deep-linked AI visitors.
+6. **Proactive "Beyond-Problem" Opportunities**:
+   - Synthesizes non-obvious proactive enhancements:
+     - Schema.org `FAQPage` for conversational AI citations.
+     - `llms.txt` context manifest for LLM token ingestion.
+     - Instant-value widgets and context-aware referrer personalization for AI-referred visitors.
 
-8. **Emit Final JSON Audit Report**:
+7. **Emit Final JSON Audit Report**:
    - Emits a single JSON document strictly conforming to the required schema floor.
 
 ## Output Schema
@@ -97,9 +95,9 @@ Activate this skill when:
       "id": "F-001",
       "title": "AI Assistant Crawlers Blocked in robots.txt",
       "severity": "critical",
-      "evidence": "robots.txt disallows access to top AI retrieval crawlers: GPTBot, ClaudeBot. This directly prevents AI assistants from indexing or citing brand facts.",
+      "evidence": "robots.txt disallows GPTBot, ClaudeBot...",
       "suggested_action": {
-        "summary": "Update robots.txt to explicitly allow GPTBot, ClaudeBot, and PerplexityBot on public marketing and documentation paths.",
+        "summary": "Update robots.txt to allow AI crawlers:\n\nUser-agent: GPTBot\nAllow: /",
         "priority": "high"
       }
     }

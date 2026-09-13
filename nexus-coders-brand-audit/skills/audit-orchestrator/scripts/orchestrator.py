@@ -3,12 +3,14 @@
 Nexus Coders - Single Entrypoint Audit Orchestrator & Synthesizer
 Part of the nexus-coders-brand-audit Agent Skill Marketplace (Adobe University Hackathon 2026 - Round 3).
 
-Coordinates the multi-skill audit pipeline:
-1. Executes crawl-render-audit (crawler.py) for off-site AI discoverability, crawler readiness, and render gaps.
-2. Executes freshness-corroboration (corroboration_checker.py) for entity disambiguation and temporal freshness.
-3. Executes engagement-audit (engagement_analyzer.py) for on-site visitor retention, orientation, and UX friction.
-4. Synthesizes cross-skill correlations, deduplicates overlapping signals, and mathematically sums summary counts.
-5. Emits a Single Unified Audit Report strictly conforming to the Adobe Hackathon Round 3 JSON schema floor.
+Coordinates the two-skill audit pipeline:
+1. Executes discoverability-audit (crawler.py) for off-site AI discoverability, entity
+   corroboration, freshness signals, and AI-summary readiness.
+2. Executes engagement-audit (engagement_analyzer.py) for on-site visitor retention,
+   orientation, UX friction, and email-digest content readiness.
+3. Synthesizes cross-skill correlations, deduplicates overlapping signals, and
+   mathematically sums summary counts.
+4. Emits a Single Unified Audit Report strictly conforming to the required JSON schema floor.
 """
 
 import sys
@@ -31,7 +33,6 @@ class AuditOrchestrator:
         timeout: int = 6,
         disc_pages: Optional[int] = None,
         eng_pages: Optional[int] = None,
-        run_corroboration: bool = True,
         deduplicate: bool = True,
         verbose: bool = True
     ):
@@ -40,7 +41,6 @@ class AuditOrchestrator:
         self.timeout = timeout
         self.disc_pages = disc_pages if disc_pages is not None else max_pages
         self.eng_pages = eng_pages if eng_pages is not None else min(10, max_pages)
-        self.run_corroboration = run_corroboration
         self.deduplicate = deduplicate
         self.verbose = verbose
 
@@ -74,22 +74,18 @@ class AuditOrchestrator:
         ]
 
         self.crawler_path = None
-        self.corroboration_path = None
         self.engagement_path = None
 
         for s_dir in candidate_skills_dirs:
-            # Check crawl-render-audit or discoverability-audit
-            c_candidate = os.path.join(s_dir, "crawl-render-audit", "scripts", "crawler.py")
+            # Check discoverability-audit (primary) or legacy crawl-render-audit
+            c_candidate = os.path.join(s_dir, "discoverability-audit", "scripts", "crawler.py")
             if not os.path.isfile(c_candidate):
-                c_candidate = os.path.join(s_dir, "discoverability-audit", "scripts", "crawler.py")
+                c_candidate = os.path.join(s_dir, "crawl-render-audit", "scripts", "crawler.py")
 
-            corr_candidate = os.path.join(s_dir, "freshness-corroboration", "scripts", "corroboration_checker.py")
             e_candidate = os.path.join(s_dir, "engagement-audit", "scripts", "engagement_analyzer.py")
 
             if os.path.isfile(c_candidate) and not self.crawler_path:
                 self.crawler_path = c_candidate
-            if os.path.isfile(corr_candidate) and not self.corroboration_path:
-                self.corroboration_path = corr_candidate
             if os.path.isfile(e_candidate) and not self.engagement_path:
                 self.engagement_path = e_candidate
 
@@ -101,8 +97,6 @@ class AuditOrchestrator:
             for root, _, files in os.walk(os.path.abspath(os.path.join(current_script_dir, "..", "..", ".."))):
                 if "crawler.py" in files and not self.crawler_path:
                     self.crawler_path = os.path.join(root, "crawler.py")
-                if "corroboration_checker.py" in files and not self.corroboration_path:
-                    self.corroboration_path = os.path.join(root, "corroboration_checker.py")
                 if "engagement_analyzer.py" in files and not self.engagement_path:
                     self.engagement_path = os.path.join(root, "engagement_analyzer.py")
 
@@ -190,7 +184,7 @@ class AuditOrchestrator:
     def merge(self, reports: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Merges sub-skill reports into a Single Unified Audit Report.
-        Mathematically sums summary counts from all sub-skills and concatenates findings into one array.
+        Mathematically sums summary counts and concatenates findings into one array.
         Eliminates duplicate collisions and guarantees strict schema conformance.
         """
         site = self.netloc or "unknown"
@@ -209,9 +203,11 @@ class AuditOrchestrator:
             merged_raw: List[Dict[str, Any]] = []
             for f in raw_findings:
                 norm_title = f.get("title", "").strip().lower()
-                # Also normalize common variant titles
+                # Normalize common variant titles that cover the same concern
                 if "sameas" in norm_title or "knowledge graph" in norm_title:
                     norm_title = "entity_ambiguity_sameas_key"
+                if "email" in norm_title and "summary" in norm_title:
+                    norm_title = "ai_email_summary_readiness_key"
 
                 if norm_title in seen_titles:
                     existing = seen_titles[norm_title]
@@ -225,22 +221,21 @@ class AuditOrchestrator:
         else:
             raw_concatenated = list(raw_findings)
 
-        # Sort findings logically: critical first, then high, medium, low
+        # Sort findings: critical first, then high, medium, low
         severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
         sorted_findings = sorted(
             raw_concatenated,
             key=lambda item: severity_order.get(item.get("severity", "medium").lower(), 2)
         )
 
-        # Sequentially re-index findings F-001, F-002, ... for clean contiguous IDs
+        # Re-index findings F-001, F-002, ... for clean contiguous IDs
         merged_findings = []
         for idx, finding in enumerate(sorted_findings, start=1):
             entry = dict(finding)
             entry["id"] = f"F-{idx:03d}"
             merged_findings.append(entry)
 
-        # Bulletproof mathematical re-summation computed directly over merged_findings
-        # Strictly guarantees: summary.total_findings == sum(severities) == len(findings)
+        # Bulletproof mathematical re-summation: summary.total_findings == sum(severities) == len(findings)
         summary = {
             "total_findings": len(merged_findings),
             "critical": sum(1 for f in merged_findings if f.get("severity") == "critical"),
@@ -259,32 +254,23 @@ class AuditOrchestrator:
         return unified_report
 
     def run(self) -> Dict[str, Any]:
-        """Runs crawl-render, freshness-corroboration, and engagement audits, merging into unified report."""
+        """Runs discoverability and engagement audits, merging into a unified report."""
         self._log(f"Starting end-to-end unified brand audit for: {self.base_url}")
-        self._log(f"Crawl-render path: {self.crawler_path}")
-        self._log(f"Freshness-corroboration path: {self.corroboration_path}")
+        self._log(f"Discoverability path: {self.crawler_path}")
         self._log(f"Engagement path: {self.engagement_path}")
 
         reports = []
 
-        # 1. Crawl & Render Audit
+        # 1. Discoverability Audit (off-site AI readiness + entity corroboration)
         if self.crawler_path:
             disc_report = self._run_sub_script(
                 self.crawler_path,
-                "crawl-render-audit",
+                "discoverability-audit",
                 ["--max-pages", str(self.disc_pages)]
             )
             reports.append(disc_report)
 
-        # 2. Freshness & Corroboration Audit
-        if self.run_corroboration and self.corroboration_path:
-            corr_report = self._run_sub_script(
-                self.corroboration_path,
-                "freshness-corroboration"
-            )
-            reports.append(corr_report)
-
-        # 3. Engagement Audit
+        # 2. Engagement Audit (on-site retention + AI-summary readiness)
         if self.engagement_path:
             eng_report = self._run_sub_script(
                 self.engagement_path,
@@ -308,7 +294,6 @@ def main():
     parser.add_argument("--disc-pages", type=int, default=None, help="Explicit max pages for discoverability audit")
     parser.add_argument("--eng-pages", type=int, default=None, help="Explicit max pages for engagement audit")
     parser.add_argument("--timeout", type=int, default=6, help="HTTP timeout in seconds (default: 6)")
-    parser.add_argument("--no-corroboration", action="store_true", help="Skip the freshness & entity corroboration sub-skill")
     parser.add_argument("--output", "-o", help="Path to write the Single Unified Audit Report (JSON)")
     parser.add_argument("--from-files", nargs="+", metavar="REPORT_JSON", help="Directly merge pre-existing JSON report files")
     parser.add_argument("--no-dedup", action="store_true", help="Disable deduplication across sub-skill findings")
@@ -322,7 +307,6 @@ def main():
         timeout=args.timeout,
         disc_pages=args.disc_pages,
         eng_pages=args.eng_pages,
-        run_corroboration=not args.no_corroboration,
         deduplicate=not args.no_dedup,
         verbose=not args.quiet
     )
